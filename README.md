@@ -25,21 +25,21 @@ sla-report-v2/
 │   │   ├── routes/                      # Express routers
 │   │   ├── services/
 │   │   │   ├── helpdesk.service.js      # Rate-limit aware Helpdesk API client (429 Retry-After)
-│   │   │   ├── sync.service.js          # Initial & live incremental /v1/changes sync + 410 recovery
+│   │   │   ├── sync.service.js          # Atomic initial & multi-page incremental /v1/changes sync + 410 recovery
 │   │   │   ├── sla.service.js           # Pure implementation of all 7 SLA business rules
-│   │   │   └── report.service.js        # Version-cached SLA report & keyset cursor pagination
+│   │   │   └── report.service.js        # Version-cached SLA report & HMAC snapshot cursor pagination
 │   │   ├── types/                       # Shared domain constants
 │   │   ├── utils/
 │   │   │   ├── timezone.utils.js        # IANA timezone wall-clock & business-hours calculator
-│   │   │   └── pagination.utils.js      # HMAC-signed keyset cursor encoder/decoder
+│   │   │   └── pagination.utils.js      # HMAC-signed cursor encoder/decoder
 │   │   ├── app.js                       # Express app factory
 │   │   └── server.js                    # HTTP server & background sync starter
-│   ├── tests/                           # Unit, integration, sync & 12k benchmark tests (*.test.js)
+│   ├── tests/                           # 22 unit, integration, sync & 12k benchmark tests (*.test.js)
 │   └── package.json
 ├── frontend/
 │   ├── src/
 │   │   ├── components/                  # Header, SummaryCards, FilterBar, RespondersTable, RequestsTable
-│   │   ├── hooks/useReport.ts           # Data fetching & live polling hook
+│   │   ├── hooks/useReport.ts           # Race-safe data fetching & version-aware live polling hook
 │   │   ├── pages/Dashboard.tsx          # Main dashboard view
 │   │   ├── services/report.api.ts       # Frontend API client
 │   │   ├── styles/global.css            # Clean SaaS dashboard styling
@@ -52,7 +52,7 @@ sla-report-v2/
 ├── docs/                                # Official specification (rules.md, contract.md, api.md)
 ├── Dockerfile                           # Multi-stage build for backend + frontend
 ├── docker-compose.yml                   # Official compose definition exposing port 8080
-├── DECISIONS.md                         # Engineering decisions, assumptions & trade-offs
+├── DECISIONS.md                         # Engineering decisions, assumptions, benchmarks & trade-offs
 └── .env.example                         # Environment template
 ```
 
@@ -106,13 +106,16 @@ npm start
 
 ---
 
-## Implemented Levels & Endpoints
+## Implemented Levels & Measured Benchmarks
 
 - **Level 1 — Accurate SLA Report (`GET /api/sla-report?from=YYYY-MM-DD&to=YYYY-MM-DD`)**:
-  Implements all 7 rules in `docs/rules.md`: site-local date filtering, canceled/deleted/merged filtering, `reverts_id` event pair exclusion, earliest non-System `processing` event responder lookup with current `/v1/staff` name, exact business-hours & holiday response minutes (floored from seconds), priority target thresholds (`60`/`240`/`480`), and `completed_late` evaluation against the latest `due_at` deadline.
+  Implements all 7 rules in `docs/rules.md`: site-local date filtering, canceled/deleted/merged filtering, `reverts_id` event pair exclusion, earliest non-System `processing` event responder lookup with current `/v1/staff` name (tie-broken by `id` ascending), exact business-hours & holiday response minutes (summed in seconds across days, then floored), priority target thresholds (`60`/`240`/`480`), and `completed_late` evaluation against the latest `due_at` deadline.
 - **Level 2 — High Performance (`GET /ready`)**:
-  Bootstraps state via `/v1/sites`, `/v1/sites/{id}/holidays`, `/v1/staff`, and `/v1/changes?limit=500`, respecting `429 Retry-After` headers. Computes a 6-month report across 12,000 requests in ~1.6 seconds (and <1ms on subsequent cached reads when store version is unchanged).
+  Bootstraps state via `/v1/sites`, `/v1/sites/{id}/holidays`, `/v1/staff`, and `/v1/changes?limit=500`, respecting `429 Retry-After` headers.
+  - **Initial sync (`GET /ready` -> `200`)**: **~23.9s** for 12,004 requests and 45,921 events (limit: `< 8 minutes`).
+  - **6-Month Report (`2026-05-01`..`2026-10-31`)**: **~957ms** cold cache | **~34ms** warm cache (limit: `< 10s`).
+  - **1-Month Report (`2026-10-01`..`2026-10-31`)**: **~233ms** cold cache | **~9ms** warm cache (limit: `< 5s`).
 - **Level 3 — Live Updates**:
-  Polls `/v1/changes?cursor=...&limit=500` every 5 seconds in the background. Automatically handles `410 Gone` expired cursors by rebuilding a fresh store and performing an atomic swap.
+  Polls `/v1/changes?cursor=...&limit=500` every 5 seconds in the background, buffering multi-page batches and applying them atomically so readers never see partial updates. Automatically handles `410 Gone` expired cursors by rebuilding a staging store and performing an atomic swap.
 - **Level 4 — Filtering, Sorting & Cursor Pagination (`GET /api/requests`)**:
-  Supports `from`, `to`, `site_id`, `responder_id`, `late`, `within_target`, `sort` (`id`, `-id`, `response_business_minutes`, `-response_business_minutes` with nulls last and tie-break by `id` ascending), `limit` (`1..200`), and HMAC-signed keyset cursors (`cursor`).
+  Supports `from`, `to`, `site_id`, `responder_id`, `late`, `within_target`, `sort` (`id`, `-id`, `response_business_minutes`, `-response_business_minutes` with nulls last and tie-break by `id` ascending), `limit` (`1..200`), and HMAC-signed snapshot cursors (`cursor`) with TTL expiration and strict parameter/bounds validation (`400` on invalid cursor).

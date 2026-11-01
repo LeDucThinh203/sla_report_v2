@@ -12,6 +12,8 @@ export class SyncService {
     this.syncing = false;
     this.stopped = false;
     this.initialSyncPromise = null;
+    this.stagingCursor = null;
+    this.stagingStore = null;
   }
 
   async sleep(ms) {
@@ -70,47 +72,66 @@ export class SyncService {
 
   /**
    * Performs a complete sync of sites, holidays, staff, and the change feed into `targetStore`.
-   * If `targetStore` already has a cursor from an interrupted attempt, resumes from that cursor
-   * unless it expired (410), in which case it resets from the beginning.
+   * Stages all data in a temporary buffer if `targetStore` is not yet ready so that `targetStore`
+   * transitions to ready atomically only after the entire initial change feed has been drained.
    */
   async runFullSyncIntoStore(targetStore) {
     if (this.syncing) return;
     this.syncing = true;
     try {
-      const [sites, staff] = await Promise.all([
-        this.client.getSites(),
-        this.client.getStaff(),
-      ]);
+      const workStore =
+        targetStore === this.store && !targetStore.isReady()
+          ? (this.stagingStore ?? (this.stagingStore = new StoreRepository()))
+          : targetStore;
 
-      targetStore.setSites(sites);
-      targetStore.setStaffList(staff);
+      if (workStore.getSitesMap().size === 0) {
+        const [sites, staff] = await Promise.all([
+          this.client.getSites(),
+          this.client.getStaff(),
+        ]);
 
-      // Fetch holidays for all sites concurrently
-      await Promise.all(
-        sites.map(async (site) => {
-          const holidays = await this.client.getSiteHolidays(site.id);
-          targetStore.setHolidaysForSite(site.id, holidays);
-        })
-      );
+        workStore.setSites(sites);
+        workStore.setStaffList(staff);
 
-      // Drain /v1/changes (resume from targetStore.getLatestCursor() if partially synced)
-      let cursor = targetStore.getLatestCursor();
+        await Promise.all(
+          sites.map(async (site) => {
+            const holidays = await this.client.getSiteHolidays(site.id);
+            workStore.setHolidaysForSite(site.id, holidays);
+          })
+        );
+      }
+
+      let cursor = workStore.getLatestCursor();
       let hasMore = true;
 
       while (hasMore && !this.stopped) {
         try {
           const page = await this.client.getChanges(cursor, 500);
-          targetStore.applyChanges(page.data);
+          workStore.applyChanges(page.data);
           if (page.next_cursor) {
             cursor = page.next_cursor;
-            targetStore.setLatestCursor(cursor);
+            workStore.setLatestCursor(cursor);
           }
           hasMore = Boolean(page.has_more && page.next_cursor);
         } catch (err) {
           if (err instanceof HelpdeskApiError && err.status === 410) {
-            // Cursor expired during bootstrap: restart feed from beginning
+            // Cursor expired during bootstrap: reset workStore and restart feed from beginning
+            const sites = Array.from(workStore.getSitesMap().values());
+            const staff = Array.from(workStore.getStaffMap().entries()).map(
+              ([id, name]) => ({ id, name })
+            );
+            const holidaysSnapshot = new Map(workStore.getHolidaysBySiteMap());
+            const cleanStore = new StoreRepository();
+            cleanStore.setSites(sites);
+            cleanStore.setStaffList(staff);
+            for (const [siteId, set] of holidaysSnapshot.entries()) {
+              cleanStore.setHolidaysForSite(
+                siteId,
+                Array.from(set).map((date) => ({ date, name: "" }))
+              );
+            }
+            workStore.replaceFrom(cleanStore);
             cursor = null;
-            targetStore.setLatestCursor(null);
             continue;
           }
           throw err;
@@ -118,8 +139,12 @@ export class SyncService {
       }
 
       if (!this.stopped) {
-        targetStore.setLastSyncedAt(new Date().toISOString());
-        targetStore.setReady(true);
+        workStore.setLastSyncedAt(new Date().toISOString());
+        workStore.setReady(true);
+        if (workStore !== targetStore) {
+          targetStore.replaceFrom(workStore);
+          this.stagingStore = null;
+        }
       }
     } finally {
       this.syncing = false;
@@ -128,6 +153,8 @@ export class SyncService {
 
   /**
    * Polls `/v1/changes` from the latest cursor to pick up incremental updates within 60s.
+   * Buffers all pages of an incremental batch and applies them in a single atomic commit
+   * so concurrent report readers never observe half-applied multi-page updates.
    * Handles 410 Gone (expired cursor) by rebuilding a fresh store and swapping atomically.
    */
   async syncIncremental() {
@@ -142,20 +169,28 @@ export class SyncService {
     try {
       let cursor = this.store.getLatestCursor();
       let hasMore = true;
+      const bufferedChanges = [];
 
       while (hasMore && !this.stopped) {
         const page = await this.client.getChanges(cursor, 500);
         if (page.data.length > 0) {
-          this.store.applyChanges(page.data);
+          bufferedChanges.push(...page.data);
         }
         if (page.next_cursor) {
           cursor = page.next_cursor;
-          this.store.setLatestCursor(cursor);
         }
         hasMore = Boolean(page.has_more && page.next_cursor && page.data.length > 0);
       }
 
-      this.store.setLastSyncedAt(new Date().toISOString());
+      if (!this.stopped) {
+        if (bufferedChanges.length > 0) {
+          this.store.applyChanges(bufferedChanges);
+        }
+        if (cursor) {
+          this.store.setLatestCursor(cursor);
+        }
+        this.store.setLastSyncedAt(new Date().toISOString());
+      }
     } catch (err) {
       if (err instanceof HelpdeskApiError && err.status === 410) {
         // Cursor expired after 15 minutes: rebuild into a temporary store and swap atomically

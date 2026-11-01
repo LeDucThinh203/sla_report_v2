@@ -23,13 +23,24 @@ export class ServiceUnavailableError extends Error {
   }
 }
 
-const MAX_SNAPSHOTS = 200;
+const DEFAULT_MAX_SNAPSHOTS = 200;
+const DEFAULT_SNAPSHOT_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 export class ReportService {
-  constructor(store) {
+  constructor(store, options = {}) {
     this.store = store;
+    this.maxSnapshots = options.maxSnapshots ?? DEFAULT_MAX_SNAPSHOTS;
+    this.snapshotTtlMs = options.snapshotTtlMs ?? DEFAULT_SNAPSHOT_TTL_MS;
     this.reportCache = new Map();
     this.walkSnapshots = new Map();
+  }
+
+  pruneExpiredSnapshots(now = Date.now()) {
+    for (const [sid, snap] of this.walkSnapshots.entries()) {
+      if (now - snap.createdAt > this.snapshotTtlMs) {
+        this.walkSnapshots.delete(sid);
+      }
+    }
   }
 
   getSlaReport(from, to) {
@@ -67,6 +78,9 @@ export class ReportService {
       throw new ServiceUnavailableError();
     }
 
+    const now = Date.now();
+    this.pruneExpiredSnapshots(now);
+
     const fingerprint = buildFilterFingerprint(query);
 
     let snapshotId;
@@ -83,6 +97,15 @@ export class ReportService {
       if (!snapshot || snapshot.fp !== fingerprint) {
         throw new BadRequestError("Invalid or expired cursor");
       }
+
+      if (cursorPayload.offset <= 0 || cursorPayload.offset >= snapshot.rows.length) {
+        throw new BadRequestError("Cursor offset out of range");
+      }
+
+      // Refresh LRU position & timestamp on active walk
+      snapshot.createdAt = now;
+      this.walkSnapshots.delete(cursorPayload.sid);
+      this.walkSnapshots.set(cursorPayload.sid, snapshot);
 
       snapshotId = cursorPayload.sid;
       offset = cursorPayload.offset;
@@ -114,17 +137,16 @@ export class ReportService {
       snapshotId = crypto.randomBytes(12).toString("base64url");
 
       // Evict oldest snapshot if capacity exceeded
-      if (this.walkSnapshots.size >= MAX_SNAPSHOTS) {
+      while (this.walkSnapshots.size >= this.maxSnapshots) {
         const oldestKey = this.walkSnapshots.keys().next().value;
-        if (oldestKey !== undefined) {
-          this.walkSnapshots.delete(oldestKey);
-        }
+        if (oldestKey === undefined) break;
+        this.walkSnapshots.delete(oldestKey);
       }
 
       this.walkSnapshots.set(snapshotId, {
         fp: fingerprint,
         rows,
-        createdAt: Date.now(),
+        createdAt: now,
       });
     }
 

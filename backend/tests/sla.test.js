@@ -24,21 +24,21 @@ const SINGAPORE_SITE = {
     wed: { open: "08:00", close: "18:00" },
     thu: { open: "08:00", close: "18:00" },
     fri: { open: "08:00", close: "18:00" },
-    sat: { open: "09:00", close: "13:00" },
+    sat: null,
     sun: null,
   },
 };
 
 const SYDNEY_SITE = {
   id: 12,
-  name: "Harbour View Sydney",
+  name: "Bluebay House Sydney",
   timezone: "Australia/Sydney", // UTC+10 / UTC+11 (DST starts first Sunday of Oct)
   business_hours: {
-    mon: { open: "08:30", close: "17:30" },
-    tue: { open: "08:30", close: "17:30" },
-    wed: { open: "08:30", close: "17:30" },
-    thu: { open: "08:30", close: "17:30" },
-    fri: { open: "08:30", close: "17:30" },
+    mon: { open: "07:30", close: "17:00" },
+    tue: { open: "07:30", close: "17:00" },
+    wed: { open: "07:30", close: "17:00" },
+    thu: { open: "07:30", close: "17:00" },
+    fri: { open: "07:30", close: "17:00" },
     sat: null,
     sun: null,
   },
@@ -46,7 +46,7 @@ const SYDNEY_SITE = {
 
 const JAKARTA_SITE = {
   id: 13,
-  name: "Sudirman Plaza Jakarta",
+  name: "Bluebay Plaza Jakarta",
   timezone: "Asia/Jakarta", // UTC+7
   business_hours: {
     mon: { open: "08:00", close: "17:00" },
@@ -54,7 +54,7 @@ const JAKARTA_SITE = {
     wed: { open: "08:00", close: "17:00" },
     thu: { open: "08:00", close: "17:00" },
     fri: { open: "08:00", close: "17:00" },
-    sat: null,
+    sat: { open: "08:00", close: "12:00" },
     sun: null,
   },
 };
@@ -106,8 +106,8 @@ describe("Rule 1: Which requests count & timezone date conversion", () => {
   });
 });
 
-describe("Rule 2: Undone events", () => {
-  test("ignores both reverted event and reverting event", () => {
+describe("Rule 2: Undone events & chained reverts", () => {
+  test("ignores both reverted event and reverting event, including multiple/chained reverts", () => {
     const events = [
       {
         id: 100,
@@ -136,6 +136,24 @@ describe("Rule 2: Undone events", () => {
         due_at: null,
         reverts_id: null,
       },
+      {
+        id: 103,
+        status: "complete",
+        at: 1800,
+        actor_id: 302,
+        actor_name: "Bob",
+        due_at: null,
+        reverts_id: null,
+      },
+      {
+        id: 104,
+        status: "processing",
+        at: 1900,
+        actor_id: 302,
+        actor_name: "Bob",
+        due_at: null,
+        reverts_id: 103, // reverts complete event 103
+      },
     ];
 
     const active = filterActiveEvents(events);
@@ -145,13 +163,24 @@ describe("Rule 2: Undone events", () => {
   });
 });
 
-describe("Rule 3 & Rule 4: First response, business hours, weekends & holidays", () => {
+describe("Rule 3 & Rule 4: First response, business hours, weekends, holidays & equal timestamps", () => {
   test("calculates business minutes within a single workday and floors seconds to minutes", () => {
     const startSec = Math.floor(Date.parse("2026-10-06T01:00:00Z") / 1000);
-    const endSec = startSec + 42 * 60 + 59;
+    const endSec = startSec + 42 * 60 + 59; // 42m 59s -> 42m
 
     const mins = calculateBusinessMinutes(startSec, endSec, SINGAPORE_SITE, new Set());
     assert.equal(mins, 42);
+  });
+
+  test("sums partial seconds across multiple days before flooring to minutes", () => {
+    // Day 1 (Tue 2026-10-06): created at 17:59:30 SGT (09:59:30Z) -> 30 seconds before 18:00 close
+    // Day 2 (Wed 2026-10-07): responded at 08:00:40 SGT (00:00:40Z) -> 40 seconds after 08:00 open
+    // Total seconds = 30 + 40 = 70 seconds -> floor(70 / 60) = 1 minute!
+    const startSec = Math.floor(Date.parse("2026-10-06T09:59:30Z") / 1000);
+    const endSec = Math.floor(Date.parse("2026-10-07T00:00:40Z") / 1000);
+
+    const mins = calculateBusinessMinutes(startSec, endSec, SINGAPORE_SITE, new Set());
+    assert.equal(mins, 1);
   });
 
   test("returns 0 if response is earlier than created_at", () => {
@@ -160,23 +189,44 @@ describe("Rule 3 & Rule 4: First response, business hours, weekends & holidays",
     assert.equal(calculateBusinessMinutes(startSec, endSec, SINGAPORE_SITE, new Set()), 0);
   });
 
-  test("excludes overnight non-business hours, Sundays, and holidays", () => {
-    const startSec = Math.floor(Date.parse("2026-10-09T09:00:00Z") / 1000);
+  test("excludes overnight non-business hours, weekends, and holidays across multiple days", () => {
+    // Thursday 2026-10-08 17:00 SGT (09:00 UTC) -> 1 hour left on Thursday (closes 18:00)
+    // Friday 2026-10-09 is a Holiday ("09/10/2026") -> 0 hours counted
+    // Saturday 2026-10-10 & Sunday 2026-10-11 are closed in Singapore -> 0 hours counted
+    // Monday 2026-10-12 opens 08:00 SGT, response at 08:30 SGT (00:30 UTC) -> 30 mins
+    // Total expected = 60 + 30 = 90 minutes.
+    const startSec = Math.floor(Date.parse("2026-10-08T09:00:00Z") / 1000);
     const endSec = Math.floor(Date.parse("2026-10-12T00:30:00Z") / 1000);
-    const holidays = new Set([parseHolidayDateToIso("10/10/2026")]);
+    const holidays = new Set([parseHolidayDateToIso("09/10/2026")]);
 
     const mins = calculateBusinessMinutes(startSec, endSec, SINGAPORE_SITE, holidays);
     assert.equal(mins, 90);
   });
 
-  test("handles Sydney DST transition accurately (Oct 4, 2026)", () => {
-    const startSec = Math.floor(Date.parse("2026-10-04T21:30:00Z") / 1000);
-    const endSec = Math.floor(Date.parse("2026-10-04T22:15:00Z") / 1000);
-    const mins = calculateBusinessMinutes(startSec, endSec, SYDNEY_SITE, new Set());
-    assert.equal(mins, 45);
+  test("counts Jakarta Saturday morning business hours (08:00-12:00)", () => {
+    // Saturday 2026-10-10 in Jakarta (UTC+7): open 08:00 (01:00Z) to 12:00 (05:00Z)
+    const startSec = Math.floor(Date.parse("2026-10-10T00:30:00Z") / 1000); // 07:30 WIB (before open)
+    const endSec = Math.floor(Date.parse("2026-10-10T06:00:00Z") / 1000); // 13:00 WIB (after close)
+    const mins = calculateBusinessMinutes(startSec, endSec, JAKARTA_SITE, new Set());
+    assert.equal(mins, 240); // Full 4 hours window
   });
 
-  test("ignores System events (actor_id: null) when finding first response and uses current staff name", () => {
+  test("handles Sydney DST transition accurately (Oct 4, 2026)", () => {
+    // Friday 2 Oct 2026 in Sydney is AEST (UTC+10). Close is 17:00 AEST = 07:00Z.
+    // Created Friday 2 Oct 2026 at 16:00 AEST (06:00Z) -> 60 mins on Friday.
+    // Sat 3 Oct & Sun 4 Oct (DST transition day) closed.
+    // Mon 5 Oct 2026 is Labour Day holiday ("05/10/2026") -> closed.
+    // Tue 6 Oct 2026 is AEDT (UTC+11). Open is 07:30 AEDT = 2026-10-05T20:30:00Z.
+    // Responded Tue 6 Oct at 08:00 AEDT = 2026-10-05T21:00:00Z -> 30 mins on Tuesday.
+    // Total = 60 + 30 = 90 mins.
+    const startSec = Math.floor(Date.parse("2026-10-02T06:00:00Z") / 1000);
+    const endSec = Math.floor(Date.parse("2026-10-05T21:00:00Z") / 1000);
+    const holidays = new Set([parseHolidayDateToIso("05/10/2026")]);
+    const mins = calculateBusinessMinutes(startSec, endSec, SYDNEY_SITE, holidays);
+    assert.equal(mins, 90);
+  });
+
+  test("ignores System events (actor_id: null), uses current staff name, and breaks equal timestamp ties by id", () => {
     const req = {
       id: 500,
       site_id: 11,
@@ -191,23 +241,35 @@ describe("Rule 3 & Rule 4: First response, business hours, weekends & holidays",
       {
         id: 1,
         status: "processing",
-        at: baseAt + 300, // 5 mins later, but System event!
+        at: baseAt + 300, // 5 mins later, System event
         actor_id: null,
         actor_name: "System",
         due_at: null,
         reverts_id: null,
       },
       {
+        id: 3,
+        status: "processing",
+        at: baseAt + 1800, // Same timestamp as id 2, higher id
+        actor_id: 305,
+        actor_name: "Second Actor",
+        due_at: null,
+        reverts_id: null,
+      },
+      {
         id: 2,
         status: "processing",
-        at: baseAt + 1800, // 30 mins later, real staff member
+        at: baseAt + 1800, // Same timestamp as id 3, lower id wins
         actor_id: 304,
         actor_name: "Old Name",
         due_at: null,
         reverts_id: null,
       },
     ];
-    const staffMap = new Map([[304, "Benjamin Tan Updated"]]);
+    const staffMap = new Map([
+      [304, "Benjamin Tan Updated"],
+      [305, "Second Actor"],
+    ]);
     const row = evaluateRequestSla(req, events, SINGAPORE_SITE, new Set(), staffMap);
 
     assert.equal(row.responder_id, 304);
@@ -239,7 +301,7 @@ describe("Rule 5: Within target thresholds", () => {
 });
 
 describe("Rule 6 & Rule 7: Completed late and Nulls", () => {
-  test("evaluates completed_late using last complete event and latest due_at event (even if reopened)", () => {
+  test("evaluates completed_late using last complete event and latest due_at event (even if due_at is updated on a reopen event after complete)", () => {
     const req = {
       id: 600,
       site_id: 11,
@@ -250,13 +312,17 @@ describe("Rule 6 & Rule 7: Completed late and Nulls", () => {
       merged_into_id: null,
     };
 
+    const deadline1Sec = parseDueAtToUtcSeconds("07/10/2026 10:00", SINGAPORE_SITE.timezone);
     const deadline2Sec = parseDueAtToUtcSeconds("07/10/2026 12:00", SINGAPORE_SITE.timezone);
+
+    // Complete occurred at 11:00 SGT (after deadline1 10:00, but before deadline2 12:00 set on later reopen event)
+    const completeAtSec = deadline1Sec + 3600;
 
     const events = [
       {
         id: 1,
         status: "processing",
-        at: deadline2Sec - 7200,
+        at: deadline1Sec - 7200,
         actor_id: 304,
         actor_name: "Benjamin Tan",
         due_at: "07/10/2026 10:00",
@@ -264,41 +330,34 @@ describe("Rule 6 & Rule 7: Completed late and Nulls", () => {
       },
       {
         id: 2,
-        status: "processing",
-        at: deadline2Sec - 3600,
+        status: "complete",
+        at: completeAtSec,
         actor_id: 304,
         actor_name: "Benjamin Tan",
-        due_at: "07/10/2026 12:00", // updated deadline
+        due_at: null,
         reverts_id: null,
       },
       {
         id: 3,
-        status: "complete",
-        at: deadline2Sec, // Exactly on deadline -> NOT strictly after -> false
+        status: "processing", // Reopened and extended deadline to 12:00
+        at: completeAtSec + 1800,
         actor_id: 304,
         actor_name: "Benjamin Tan",
-        due_at: null,
-        reverts_id: null,
-      },
-      {
-        id: 4,
-        status: "processing", // Reopened
-        at: deadline2Sec + 60,
-        actor_id: 304,
-        actor_name: "Benjamin Tan",
-        due_at: null,
+        due_at: "07/10/2026 12:00",
         reverts_id: null,
       },
     ];
 
     const staffMap = new Map([[304, "Benjamin Tan"]]);
-    const rowOnTime = evaluateRequestSla(req, events, SINGAPORE_SITE, new Set(), staffMap);
-    assert.equal(rowOnTime.completed_late, false);
+    const rowExtended = evaluateRequestSla(req, events, SINGAPORE_SITE, new Set(), staffMap);
+    // Because the latest event with due_at is event 3 (12:00), completeAt (11:00) <= 12:00 -> completed_late: false
+    assert.equal(rowExtended.completed_late, false);
 
-    const eventsLate = [
+    // Now add a second complete event 1 second after deadline2Sec (12:00:01)
+    const eventsSecondCompleteLate = [
       ...events,
       {
-        id: 5,
+        id: 4,
         status: "complete",
         at: deadline2Sec + 1,
         actor_id: 304,
@@ -307,7 +366,13 @@ describe("Rule 6 & Rule 7: Completed late and Nulls", () => {
         reverts_id: null,
       },
     ];
-    const rowLate = evaluateRequestSla(req, eventsLate, SINGAPORE_SITE, new Set(), staffMap);
+    const rowLate = evaluateRequestSla(
+      req,
+      eventsSecondCompleteLate,
+      SINGAPORE_SITE,
+      new Set(),
+      staffMap
+    );
     assert.equal(rowLate.completed_late, true);
   });
 
@@ -414,4 +479,3 @@ describe("Rule 6 & Rule 7: Completed late and Nulls", () => {
     });
   });
 });
-

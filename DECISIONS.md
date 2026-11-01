@@ -2,34 +2,49 @@
 
 ## What I assumed
 
-- **Business hours calculation granularity**: Rule 4 states that response time is summed in seconds within the site's `business_hours` (excluding holidays in `/v1/sites/{id}/holidays`) from `created_at` to the first response's `at`, then floored to whole minutes (`Math.floor(totalSeconds / 60)`). I assumed both `open` and `close` times in `business_hours` (e.g., `"08:00"` and `"18:00"`) have `:00` seconds and represent local wall-clock intervals `[open, close)` on each non-holiday calendar date in the site's IANA timezone.
-- **Chained or duplicate reverts**: Rule 2 states *"An event with `reverts_id` undoes the event it points at. Ignore both the reverted event and the reverting event in every rule below."* I collected every event that has a non-null `reverts_id` and added both `event.id` and `event.reverts_id` to an exclusion set before evaluating Rules 3–7.
-- **Responder name from `/v1/staff` only**: Rule 3 specifies showing the current name from `/v1/staff`, not `actor_name` on the event. `sla.service.js` strictly looks up `staffById.get(responderId) ?? null` and never falls back to `event.actor_name`.
-- **Deadline seconds precision**: `due_at` values are formatted as `"DD/MM/YYYY HH:mm"` in site-local wall-clock time. I parsed them as `HH:mm:00` in the site's timezone. Rule 6 states `completed_late` is `true` when the last `complete` event's `at` is **strictly after** (`>`) the deadline timestamp.
-- **Responder summary ordering**: `docs/contract.md` states key order and `requests` order do not matter, so `requests` and `responders` in `/api/sla-report` are sorted deterministically by `id` ascending.
+- **Business hours calculation granularity (Rule 4)**: Response time is summed in exact seconds within the site's `business_hours` (excluding dates in `/v1/sites/{id}/holidays`) from `created_at` to the first response's `at`, and only floored to whole minutes at the very end (`Math.floor(totalSeconds / 60)`). Partial seconds across multiple business days accumulate before flooring. Both `open` and `close` times in `business_hours` (e.g., `"08:00"` and `"18:00"`) represent local wall-clock intervals `[open, close)` on each non-holiday calendar date in the site's IANA timezone.
+- **Chained or multiple reverts (Rule 2)**: *"An event with `reverts_id` undoes the event it points at. Ignore both the reverted event and the reverting event in every rule below."* Every event with a non-null `reverts_id` adds both `event.id` and `event.reverts_id` to an exclusion set before evaluating Rules 3–7.
+- **Responder name from `/v1/staff` only (Rule 3)**: Rule 3 specifies showing the current name from `/v1/staff`, not `actor_name` on the event. `sla.service.js` strictly resolves `staffById.get(responderId) ?? null` and never falls back to `event.actor_name`. When two candidate `processing` events share the exact same `at` timestamp, ties are broken deterministically by `event.id` ascending.
+- **Deadline evaluation and reopened requests (Rule 6)**: `due_at` values are formatted as `"DD/MM/YYYY HH:mm"` in site-local wall-clock time (`HH:mm:00`). Rule 6 states `completed_late` is `true` when the **last** `complete` event's `at` is strictly after (`>`) the `due_at` of the **latest** non-reverted event that has a `due_at` (evaluated independently across all non-reverted events on the request).
+- **Deterministic output ordering**: `docs/contract.md` states key order and `requests` order in `/api/sla-report` do not matter, so `requests` and `responders` in `/api/sla-report` are sorted deterministically by `id` ascending.
 
 ## What I found in the API or data
 
-- **Per-request event fetching vs. `/v1/changes`**: Fetching `/v1/requests/{id}/events` individually for ~12,000 requests over 6 months would require 12,000+ HTTP requests and immediately trigger `429 Too Many Requests` rate limits. Instead, `/v1/changes?limit=500` streams all `request.created`, `request.updated`, `event.created`, and `staff.updated` records sequentially in batches of 500. Draining `/v1/changes` populates the entire dataset in a fraction of the time and avoids flooding the API.
-- **Rate limiting (`429 Retry-After`)**: All Helpdesk API endpoints enforce rate limits. I implemented automatic retry logic in `HelpdeskClient` that reads the `Retry-After` response header (or falls back to exponential backoff) and also retries transient `5xx` errors.
-- **Expired change-feed cursors (`410 Gone`)**: Cursors from `/v1/changes` expire after 15 minutes. In `SyncService.syncIncremental()`, if the API returns `410`, the service builds a fresh `StoreRepository` instance from scratch and atomically swaps it into the active store so in-flight report requests never see partial state.
-- **Daylight Saving Time (DST) in Sydney (`Australia/Sydney`)**: Unlike Singapore (`UTC+8`) and Jakarta (`UTC+7`), Sydney transitions between AEST (`UTC+10`) and AEDT (`UTC+11`) on the first Sunday of October. Using fixed UTC offsets would miscalculate October business hours and deadlines by 1 hour. I used Node's built-in `Intl.DateTimeFormat` with `formatToParts` and iterative wall-clock-to-UTC convergence (`localWallClockToUtcSeconds`) to handle DST transitions without external libraries.
+- **Per-request event fetching vs. `/v1/changes` (Level 2)**: The Practice API contains **12,004 requests** and **45,921 events** across 3 sites (`11` Singapore, `12` Sydney, `13` Jakarta) and 15 staff members. Fetching `/v1/requests/{id}/events` individually would require 12,000+ HTTP requests and immediately hit `429 Too Many Requests`. Instead, draining `/v1/changes?limit=500` (~116 pages) streams all `request.created`, `request.updated`, `event.created`, and `staff.updated` records sequentially in **~23.9 seconds** on container startup.
+- **Real data anomalies verified against the 7 rules**:
+  - **Response earlier than `created_at`**: Request `#63467` in the Practice API has a first `processing` event (`at: 2026-09-12T10:33:00Z`) earlier than `created_at` (`2026-09-12T10:38:00Z`). Under Rule 4, `calculateBusinessMinutes` returns `0` (`within_target: true`).
+  - **Reopen after `complete` with extended `due_at`**: Requests `#64116` and `#64398` have a `complete` event followed later by a `reopen` event that sets a new, extended `due_at`. Because Rule 6 defines the deadline as the `due_at` of the latest event that has one, evaluating the last `complete` event and the latest `due_at` event independently handles deadline extensions accurately.
+  - **Site-specific schedules & Sydney DST**:
+    - Site `11` (`Asia/Singapore`, `UTC+8`): Mon–Fri `08:00–18:00`, Sat/Sun closed, 5 holidays in 2026.
+    - Site `12` (`Australia/Sydney`, `UTC+10` / `UTC+11`): Mon–Fri `07:30–17:00`, Sat/Sun closed, 2 holidays (`08/06/2026`, `05/10/2026`). Transitions from AEST (`UTC+10`) to AEDT (`UTC+11`) on October 4, 2026. Fixed UTC offsets would miscalculate October business hours and `due_at` deadlines by 1 hour; using `Intl.DateTimeFormat` with iterative wall-clock-to-UTC convergence (`localWallClockToUtcSeconds`) handles DST transitions accurately.
+    - Site `13` (`Asia/Jakarta`, `UTC+7`): Mon–Fri `08:00–17:00`, **Saturday `08:00–12:00`**, Sunday closed, 7 holidays in 2026.
+  - **Reverted events**: Found 195 reverting events (`reverts_id !== null`) in the live feed, all properly excluded along with their target events.
+- **Rate limiting (`429 Retry-After`) and Expired Cursors (`410 Gone`)**: `HelpdeskClient` honors the `Retry-After` header with exponential backoff fallback for `429` and transient `5xx` responses. `SyncService` buffers multi-page incremental polls and commits them atomically to `StoreRepository`, and on `410 Gone` rebuilds a fresh staging store before swapping it in atomically.
+
+## Measured Benchmarks (Docker Container on Port 8080)
+
+- **Cold Bootstrap (`GET /ready` -> `200`)**: **23.87 seconds** for 12,004 requests & 45,921 events (target: `< 8 minutes`).
+- **6-Month Report (`2026-05-01` to `2026-10-31`, 11,044 eligible requests)**: **957.21 ms** cold cache | **33.73 ms** warm cache (target: `< 10 seconds`).
+- **1-Month Report (`2026-10-01` to `2026-10-31`, 1,910 eligible requests)**: **232.59 ms** cold cache | **8.85 ms** warm cache (target: `< 5 seconds`).
+- **1-Week Report (`2026-10-12` to `2026-10-18`, 419 eligible requests)**: **399.35 ms** cold cache | **4.29 ms** warm cache.
+- **Full 6-Month Cursor Walk (`GET /api/requests`, 56 pages of 200 rows = 11,044 rows)**: **239.48 ms** total (~4.28 ms/page), 0 duplicates, 0 omissions.
 
 ## How I used AI
 
-- **Tools used**: Antigravity (AI pair-programming assistant).
+- **Tools used**: Antigravity (AI coding assistant).
 - **What I asked & how it helped**:
-  - Analyzed the starter kit (`docs/rules.md`, `docs/contract.md`, `docs/api.md`) to verify all edge cases across the 7 rules.
-  - Scaffolded the project structure separating `backend/` (Node.js 22 + Express 5 ES Modules + `node --test`) and `frontend/` (React 18 + Vite + TypeScript) while preserving the single `app` service contract in `docker-compose.yml` via a multi-stage `Dockerfile`.
-  - Assisted in writing unit and integration tests for timezone conversions, DST boundaries, `reverts_id` filtering, keyset cursor pagination, and the 12,000-request performance benchmark.
+  - Audited `docs/rules.md`, `docs/contract.md`, and live Practice API edge cases (`#63467`, `#64116`, Sydney DST, Jakarta Saturday hours).
+  - Structured the application with a pure ES Module JavaScript backend (`backend/src/`) and a React + TypeScript + Vite frontend (`frontend/src/`) bundled via a multi-stage `Dockerfile`.
+  - Built comprehensive unit, integration, resilience, and 12,000-request benchmark tests in `backend/tests/`.
 - **What came back wrong & what I changed**:
-  - Initially, the backend used TypeScript which required a compilation step (`tsc`) before running `node --test`. I converted the backend to pure ES Module JavaScript (`"type": "module"`) matching the official `starters/node-express` kit so `node src/server.js` and `node --test` execute directly without build overhead or extra devDependencies.
+  - Initially, incremental change-feed polling applied each page to the store inside the pagination loop, which could expose partial multi-page updates to a concurrent report reader. I refactored `SyncService.syncIncremental()` to buffer all pages in a poll cycle and apply them atomically in a single store version bump.
+  - Initially, cursor snapshots in `ReportService` only evicted by count (`MAX_SNAPSHOTS = 200`). I added TTL expiration (`15 minutes`), upper-bound offset validation (`offset >= rows.length` -> `400`), and LRU refresh on active walks.
 
 ## Trade-offs and what I would do next
 
-- **In-memory store vs. external database (PostgreSQL / Redis)**:
-  - *Trade-off*: To stay within the 3-hour cap and keep deployment simple and fast, all synced requests, events, sites, holidays, and staff are held in an in-memory `StoreRepository` with version-based report caching. For ~12,000 requests and ~50,000 events, memory usage is under 40 MB and 6-month SLA reports compute in ~1.6 seconds cold (<1 ms cached). However, restarting the container requires re-draining `/v1/changes`.
-  - *Next step*: Persist the synced entities and latest `cursor` in PostgreSQL or SQLite so container restarts resume incrementally from the last cursor instead of re-syncing from sequence 0.
+- **In-memory store vs. persistent database (PostgreSQL / SQLite)**:
+  - *Trade-off*: Storing all synced entities in an in-memory `StoreRepository` keeps memory footprint small (< 45 MB for 12k requests and 46k events), avoids external container dependencies, and computes 6-month SLA reports in < 1 second cold. However, a container restart requires re-draining `/v1/changes` (~24 seconds).
+  - *Next step*: Persist the synced entities and change-feed cursor in SQLite or PostgreSQL so container restarts resume incrementally from the last cursor.
 - **Snapshot-backed cursor pagination on `/api/requests`**:
-  - *Trade-off*: To guarantee that any row that exists and matches the filter for the entire walk appears **exactly once** even if its `response_business_minutes` or other rows change mid-walk, page 1 creates a bounded in-memory sorted snapshot identified by `sid`, and `next_cursor` is HMAC-SHA256 signed over `(filterFingerprint, sid, offset)`. Tampered, mismatched, or unknown cursors immediately return `400`.
-  - *Next step*: Pre-compute and incrementally maintain each request's evaluated `RequestReportRow` on `event.created` / `request.updated` / `staff.updated` events so uncached report generation is $O(N)$ field reads rather than re-evaluating event lists.
+  - *Trade-off*: To strictly satisfy the `docs/contract.md` requirement that any row existing and matching the filter for the entire walk appears **exactly once** even if its `response_business_minutes` mutates mid-walk, page 1 captures a lightweight sorted row snapshot (`sid`) bounded by both `MAX_SNAPSHOTS = 200` and a 15-minute TTL, and signs `(filterFingerprint, sid, offset)` with HMAC-SHA256. Tampered, mismatched, out-of-range, or expired cursors return `400`.
+  - *Next step*: Materialize evaluated SLA fields incrementally on each request as events arrive so cold report generation requires zero event-list re-evaluation.

@@ -24,12 +24,15 @@ export function useReport(initialFilters: BrowseFilterState) {
 
   const cursorHistoryRef = useRef<(string | null)[]>([null]);
   const pageIndexRef = useRef<number>(0);
+  const requestSeqRef = useRef<number>(0);
 
   const loadFullData = useCallback(async (activeFilters: BrowseFilterState) => {
+    const seq = ++requestSeqRef.current;
     setLoading(true);
     setError(null);
     try {
       const meta = await fetchMetadata();
+      if (seq !== requestSeqRef.current) return;
       setMetadata(meta);
 
       if (!meta.ready) {
@@ -41,6 +44,7 @@ export function useReport(initialFilters: BrowseFilterState) {
         fetchSlaReport(activeFilters.from, activeFilters.to),
         fetchBrowseRequests(activeFilters, null),
       ]);
+      if (seq !== requestSeqRef.current) return;
 
       const initialHistory: (string | null)[] = [null];
       setReport(slaData);
@@ -51,9 +55,12 @@ export function useReport(initialFilters: BrowseFilterState) {
       setCursorHistory(initialHistory);
       cursorHistoryRef.current = initialHistory;
     } catch (err) {
+      if (seq !== requestSeqRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to load report data");
     } finally {
-      setLoading(false);
+      if (seq === requestSeqRef.current) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -64,10 +71,13 @@ export function useReport(initialFilters: BrowseFilterState) {
       targetPageIndex: number,
       newHistory?: (string | null)[]
     ) => {
+      const seq = ++requestSeqRef.current;
       setLoading(true);
       setError(null);
       try {
         const browseData = await fetchBrowseRequests(activeFilters, cursor);
+        if (seq !== requestSeqRef.current) return;
+
         setBrowseRows(browseData.data);
         setNextCursor(browseData.next_cursor);
         setPageIndex(targetPageIndex);
@@ -78,9 +88,12 @@ export function useReport(initialFilters: BrowseFilterState) {
           cursorHistoryRef.current = newHistory;
         }
       } catch (err) {
+        if (seq !== requestSeqRef.current) return;
         setError(err instanceof Error ? err.message : "Failed to load page");
       } finally {
-        setLoading(false);
+        if (seq === requestSeqRef.current) {
+          setLoading(false);
+        }
       }
     },
     []
@@ -111,11 +124,16 @@ export function useReport(initialFilters: BrowseFilterState) {
             void Promise.all([
               fetchSlaReport(filters.from, filters.to),
               fetchBrowseRequests(filters, currentCursor),
-            ]).then(([slaData, browseData]) => {
-              setReport(slaData);
-              setBrowseRows(browseData.data);
-              setNextCursor(browseData.next_cursor);
-            });
+            ])
+              .then(([slaData, browseData]) => {
+                setReport(slaData);
+                setBrowseRows(browseData.data);
+                setNextCursor(browseData.next_cursor);
+              })
+              .catch(() => {
+                // If cursor snapshot expired on live refresh, fall back to page 1
+                void loadFullData(filters);
+              });
           }
           return meta;
         });
@@ -148,6 +166,7 @@ export function useReport(initialFilters: BrowseFilterState) {
 
   const goToLastPage = async () => {
     if (!nextCursor || loading) return;
+    const seq = ++requestSeqRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -160,6 +179,7 @@ export function useReport(initialFilters: BrowseFilterState) {
       while (curNext !== null && safety < 500) {
         safety++;
         const pageRes = await fetchBrowseRequests(filters, curNext);
+        if (seq !== requestSeqRef.current) return;
         curIdx += 1;
         history.push(curNext);
         lastData = pageRes.data;
@@ -173,9 +193,12 @@ export function useReport(initialFilters: BrowseFilterState) {
       setCursorHistory(history);
       cursorHistoryRef.current = history;
     } catch (err) {
+      if (seq !== requestSeqRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to jump to last page");
     } finally {
-      setLoading(false);
+      if (seq === requestSeqRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -184,6 +207,7 @@ export function useReport(initialFilters: BrowseFilterState) {
   };
 
   const refresh = async () => {
+    const seq = ++requestSeqRef.current;
     const currentIdx = pageIndexRef.current;
     const currentCursor = cursorHistoryRef.current[currentIdx] ?? null;
     setLoading(true);
@@ -193,14 +217,18 @@ export function useReport(initialFilters: BrowseFilterState) {
         fetchSlaReport(filters.from, filters.to),
         fetchBrowseRequests(filters, currentCursor),
       ]);
+      if (seq !== requestSeqRef.current) return;
       setMetadata(meta);
       setReport(slaData);
       setBrowseRows(browseData.data);
       setNextCursor(browseData.next_cursor);
     } catch (err) {
+      if (seq !== requestSeqRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to refresh");
     } finally {
-      setLoading(false);
+      if (seq === requestSeqRef.current) {
+        setLoading(false);
+      }
     }
   };
 

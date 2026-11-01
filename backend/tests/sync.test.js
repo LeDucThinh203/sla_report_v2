@@ -6,14 +6,23 @@ import { HelpdeskClient } from "../src/services/helpdesk.service.js";
 import { SyncService } from "../src/services/sync.service.js";
 import { ReportService } from "../src/services/report.service.js";
 
-describe("Level 2 & Level 3: Change-feed Sync, 410 Cursor Expiry & 12k Benchmark", () => {
-  test("syncs initial changes, applies live incremental changes, and recovers from 410 expired cursor", async () => {
+describe("Level 2 & Level 3: Change-feed Sync, 429 Retry-After, 410 Expiry, Multi-page Atomic Sync & 12k Benchmark", () => {
+  test("syncs initial changes, handles 429 Retry-After, applies multi-page live changes atomically, and recovers from 410 expired cursor", async () => {
     let staffName = "Original Name";
     let force410Once = false;
+    let force429Once = true;
 
     const mockApi = http.createServer((req, res) => {
       const url = new URL(req.url || "/", "http://127.0.0.1");
       res.setHeader("Content-Type", "application/json");
+
+      if (force429Once && url.pathname === "/v1/sites") {
+        force429Once = false;
+        res.statusCode = 429;
+        res.setHeader("Retry-After", "0.05");
+        res.end(JSON.stringify({ error: "rate limited" }));
+        return;
+      }
 
       if (url.pathname === "/v1/sites") {
         res.end(
@@ -100,6 +109,7 @@ describe("Level 2 & Level 3: Change-feed Sync, 410 Cursor Expiry & 12k Benchmark
           return;
         }
 
+        // Simulate a 2-page incremental sync batch (cursor-seq-2 -> cursor-seq-3 -> cursor-seq-4)
         if (cursor === "cursor-seq-2") {
           res.end(
             JSON.stringify({
@@ -112,6 +122,33 @@ describe("Level 2 & Level 3: Change-feed Sync, 410 Cursor Expiry & 12k Benchmark
                 },
               ],
               next_cursor: "cursor-seq-3",
+              has_more: true,
+            })
+          );
+          return;
+        }
+
+        if (cursor === "cursor-seq-3") {
+          res.end(
+            JSON.stringify({
+              data: [
+                {
+                  seq: 4,
+                  type: "event.created",
+                  at: "2026-10-06T03:00:00Z",
+                  request_id: 100,
+                  event: {
+                    id: 5002,
+                    status: "complete",
+                    at: baseSec + 90 * 60,
+                    actor_id: 304,
+                    actor_name: "Updated Live Name",
+                    due_at: null,
+                    reverts_id: null,
+                  },
+                },
+              ],
+              next_cursor: "cursor-seq-4",
               has_more: false,
             })
           );
@@ -145,18 +182,22 @@ describe("Level 2 & Level 3: Change-feed Sync, 410 Cursor Expiry & 12k Benchmark
       const syncService = new SyncService(client, store, { pollIntervalMs: 0 });
       const reportService = new ReportService(store);
 
-      // 1. Initial full sync
+      // 1. Initial full sync (includes 429 retry)
       await syncService.runFullSyncIntoStore(store);
       assert.equal(store.isReady(), true);
 
       const report1 = reportService.getSlaReport("2026-10-01", "2026-10-31");
       assert.equal(report1.requests.length, 1);
       assert.equal(report1.requests[0].responder, "Original Name");
+      assert.equal(report1.requests[0].completed_late, null);
+      const versionBeforeIncremental = store.getVersion();
 
-      // 2. Incremental live sync picks up staff.updated
+      // 2. Multi-page incremental live sync picks up both staff.updated and event.created in one atomic commit
       await syncService.syncIncremental();
+      assert.equal(store.getVersion(), versionBeforeIncremental + 1);
       const report2 = reportService.getSlaReport("2026-10-01", "2026-10-31");
       assert.equal(report2.requests[0].responder, "Updated Live Name");
+      assert.equal(report2.requests[0].completed_late, false);
 
       // 3. Simulate 410 cursor expiry and verify atomic resync recovery
       staffName = "Recovered After 410 Name";
@@ -169,7 +210,7 @@ describe("Level 2 & Level 3: Change-feed Sync, 410 Cursor Expiry & 12k Benchmark
     }
   });
 
-  test("automatically retries failed initial sync and transitions /ready to true upon recovery", async () => {
+  test("automatically retries failed initial sync and transitions /ready to true only after full feed is drained", async () => {
     let failCount = 0;
 
     const flakyServer = http.createServer((req, res) => {
@@ -249,7 +290,7 @@ describe("Level 2 & Level 3: Change-feed Sync, 410 Cursor Expiry & 12k Benchmark
     }
   });
 
-  test("computes 6-month SLA report across 12,000 requests well under 10s requirement", () => {
+  test("computes 6-month SLA report across 12,000 requests and 3 sites (SG, SYD, JKT) well under 10s requirement", () => {
     const store = new StoreRepository();
     store.setSites([
       {
@@ -266,23 +307,54 @@ describe("Level 2 & Level 3: Change-feed Sync, 410 Cursor Expiry & 12k Benchmark
           sun: null,
         },
       },
+      {
+        id: 12,
+        name: "Sydney",
+        timezone: "Australia/Sydney",
+        business_hours: {
+          mon: { open: "07:30", close: "17:00" },
+          tue: { open: "07:30", close: "17:00" },
+          wed: { open: "07:30", close: "17:00" },
+          thu: { open: "07:30", close: "17:00" },
+          fri: { open: "07:30", close: "17:00" },
+          sat: null,
+          sun: null,
+        },
+      },
+      {
+        id: 13,
+        name: "Jakarta",
+        timezone: "Asia/Jakarta",
+        business_hours: {
+          mon: { open: "08:00", close: "17:00" },
+          tue: { open: "08:00", close: "17:00" },
+          wed: { open: "08:00", close: "17:00" },
+          thu: { open: "08:00", close: "17:00" },
+          fri: { open: "08:00", close: "17:00" },
+          sat: { open: "08:00", close: "12:00" },
+          sun: null,
+        },
+      },
     ]);
-    store.setHolidaysForSite(11, []);
+    store.setHolidaysForSite(11, [{ date: "10/08/2026", name: "National Day" }]);
+    store.setHolidaysForSite(12, [{ date: "05/10/2026", name: "Labour Day" }]);
+    store.setHolidaysForSite(13, [{ date: "17/08/2026", name: "Independence Day" }]);
     store.setStaffList([
       { id: 301, name: "Agent One" },
       { id: 302, name: "Agent Two" },
+      { id: 303, name: "Agent Three" },
     ]);
 
     const baseSec = Math.floor(Date.parse("2026-05-04T01:00:00Z") / 1000);
+    const siteIds = [11, 12, 13];
     for (let i = 1; i <= 12000; i++) {
-      // Spread across May - Oct 2026 (180 days)
       const dayOffset = i % 180;
       const reqSec = baseSec + dayOffset * 86400;
       const createdIso = new Date(reqSec * 1000).toISOString();
 
       store.upsertRequest({
         id: i,
-        site_id: 11,
+        site_id: siteIds[i % 3],
         status: "complete",
         priority: i % 3 === 0 ? "High" : i % 3 === 1 ? "Medium" : "Low",
         created_at: createdIso,
@@ -294,7 +366,7 @@ describe("Level 2 & Level 3: Change-feed Sync, 410 Cursor Expiry & 12k Benchmark
         id: i * 10 + 1,
         status: "processing",
         at: reqSec + 25 * 60,
-        actor_id: i % 2 === 0 ? 301 : 302,
+        actor_id: 301 + (i % 3),
         actor_name: "Agent",
         due_at: "31/10/2026 18:00",
         reverts_id: null,
@@ -304,7 +376,7 @@ describe("Level 2 & Level 3: Change-feed Sync, 410 Cursor Expiry & 12k Benchmark
         id: i * 10 + 2,
         status: "complete",
         at: reqSec + 55 * 60,
-        actor_id: i % 2 === 0 ? 301 : 302,
+        actor_id: 301 + (i % 3),
         actor_name: "Agent",
         due_at: null,
         reverts_id: null,
@@ -313,17 +385,21 @@ describe("Level 2 & Level 3: Change-feed Sync, 410 Cursor Expiry & 12k Benchmark
     store.setReady(true);
 
     const reportService = new ReportService(store);
-    const t0 = performance.now();
-    const report = reportService.getSlaReport("2026-05-01", "2026-10-31");
-    const elapsedMs = performance.now() - t0;
 
-    assert.equal(report.requests.length, 12000);
-    assert.equal(report.responders.length, 2);
-    // Level 2 requires < 10,000 ms for 6 months; verify ours runs under 2,000 ms
-    assert.ok(
-      elapsedMs < 2000,
-      `Expected 12k requests report under 2000ms, took ${elapsedMs.toFixed(1)}ms`
-    );
+    // Cold cache measurement
+    const t0Cold = performance.now();
+    const reportCold = reportService.getSlaReport("2026-05-01", "2026-10-31");
+    const coldMs = performance.now() - t0Cold;
+
+    // Warm cache measurement
+    const t0Warm = performance.now();
+    const reportWarm = reportService.getSlaReport("2026-05-01", "2026-10-31");
+    const warmMs = performance.now() - t0Warm;
+
+    assert.equal(reportCold.requests.length, 12000);
+    assert.equal(reportCold.responders.length, 3);
+    assert.equal(reportWarm.requests.length, 12000);
+    assert.ok(coldMs < 2500, `Expected cold 6m report under 2500ms, took ${coldMs.toFixed(2)}ms`);
+    assert.ok(warmMs < 5, `Expected warm 6m report under 5ms, took ${warmMs.toFixed(3)}ms`);
   });
 });
-
