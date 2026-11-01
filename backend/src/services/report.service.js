@@ -1,9 +1,9 @@
+import crypto from "node:crypto";
 import {
   buildFilterFingerprint,
   compareRequestRows,
   decodeAndVerifyCursor,
   encodeCursor,
-  isRowAfterCursor,
 } from "../utils/pagination.utils.js";
 import { buildSlaReport } from "./sla.service.js";
 
@@ -23,10 +23,13 @@ export class ServiceUnavailableError extends Error {
   }
 }
 
+const MAX_SNAPSHOTS = 200;
+
 export class ReportService {
   constructor(store) {
     this.store = store;
     this.reportCache = new Map();
+    this.walkSnapshots = new Map();
   }
 
   getSlaReport(from, to) {
@@ -51,7 +54,6 @@ export class ReportService {
       this.store.getStaffMap()
     );
 
-    // Keep cache bounded
     if (this.reportCache.size > 50) {
       this.reportCache.clear();
     }
@@ -66,52 +68,76 @@ export class ReportService {
     }
 
     const fingerprint = buildFilterFingerprint(query);
-    let cursorPayload = null;
+
+    let snapshotId;
+    let offset = 0;
+    let rows;
+
     if (query.cursor !== undefined) {
-      cursorPayload = decodeAndVerifyCursor(query.cursor, fingerprint);
+      const cursorPayload = decodeAndVerifyCursor(query.cursor, fingerprint);
       if (!cursorPayload) {
         throw new BadRequestError("Invalid or expired cursor");
       }
+
+      const snapshot = this.walkSnapshots.get(cursorPayload.sid);
+      if (!snapshot || snapshot.fp !== fingerprint) {
+        throw new BadRequestError("Invalid or expired cursor");
+      }
+
+      snapshotId = cursorPayload.sid;
+      offset = cursorPayload.offset;
+      rows = snapshot.rows;
+    } else {
+      const baseReport = this.getSlaReport(query.from, query.to);
+
+      const filtered = [];
+      for (const row of baseReport.requests) {
+        if (query.site_id !== undefined && row.site_id !== query.site_id) {
+          continue;
+        }
+        if (query.responder_id !== undefined && row.responder_id !== query.responder_id) {
+          continue;
+        }
+        if (query.late !== undefined && row.completed_late !== query.late) {
+          continue;
+        }
+        if (query.within_target !== undefined && row.within_target !== query.within_target) {
+          continue;
+        }
+        filtered.push(row);
+      }
+
+      // Sort rows according to `query.sort` (nulls last, ties by `id` ascending)
+      filtered.sort((a, b) => compareRequestRows(a, b, query.sort));
+
+      rows = filtered;
+      snapshotId = crypto.randomBytes(12).toString("base64url");
+
+      // Evict oldest snapshot if capacity exceeded
+      if (this.walkSnapshots.size >= MAX_SNAPSHOTS) {
+        const oldestKey = this.walkSnapshots.keys().next().value;
+        if (oldestKey !== undefined) {
+          this.walkSnapshots.delete(oldestKey);
+        }
+      }
+
+      this.walkSnapshots.set(snapshotId, {
+        fp: fingerprint,
+        rows,
+        createdAt: Date.now(),
+      });
     }
 
-    const baseReport = this.getSlaReport(query.from, query.to);
-
-    // Filter rows
-    const filtered = [];
-    for (const row of baseReport.requests) {
-      if (query.site_id !== undefined && row.site_id !== query.site_id) {
-        continue;
-      }
-      if (query.responder_id !== undefined && row.responder_id !== query.responder_id) {
-        continue;
-      }
-      if (query.late !== undefined && row.completed_late !== query.late) {
-        continue;
-      }
-      if (query.within_target !== undefined && row.within_target !== query.within_target) {
-        continue;
-      }
-      filtered.push(row);
-    }
-
-    // Sort rows according to `query.sort` (nulls last, ties by `id` ascending)
-    filtered.sort((a, b) => compareRequestRows(a, b, query.sort));
-
-    // Apply keyset cursor filtering
-    const afterCursor = cursorPayload
-      ? filtered.filter((row) => isRowAfterCursor(row, cursorPayload, query.sort))
-      : filtered;
-
-    const pageData = afterCursor.slice(0, query.limit);
-    const hasMore = afterCursor.length > query.limit;
+    const pageData = rows.slice(offset, offset + query.limit);
+    const nextOffset = offset + pageData.length;
+    const hasMore = nextOffset < rows.length;
 
     let nextCursor = null;
     if (hasMore && pageData.length > 0) {
-      const lastItem = pageData[pageData.length - 1];
       nextCursor = encodeCursor({
         fp: fingerprint,
-        lastId: lastItem.id,
-        lastMinutes: lastItem.response_business_minutes,
+        sid: snapshotId,
+        offset: nextOffset,
       });
     }
 
@@ -121,4 +147,3 @@ export class ReportService {
     };
   }
 }
-

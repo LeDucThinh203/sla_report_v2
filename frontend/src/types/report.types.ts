@@ -47,6 +47,7 @@ export interface StaffInfo {
 
 export interface AppMetadataResponse {
   ready: boolean;
+  data_version: number;
   last_synced_at: string | null;
   total_requests_cached: number;
   sites: SiteInfo[];

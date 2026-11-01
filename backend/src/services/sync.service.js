@@ -6,29 +6,36 @@ export class SyncService {
     this.client = client;
     this.store = store;
     this.pollIntervalMs = options.pollIntervalMs ?? 5000;
+    this.initialRetryDelayMs = options.initialRetryDelayMs ?? 1000;
+    this.maxInitialRetryDelayMs = options.maxInitialRetryDelayMs ?? 10000;
     this.pollTimer = null;
     this.syncing = false;
+    this.stopped = false;
     this.initialSyncPromise = null;
   }
 
+  async sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   /**
-   * Starts initial synchronization and schedules background polling for live changes.
+   * Starts initial synchronization with automatic exponential backoff retry until `/ready` becomes `true`,
+   * then transitions into background incremental polling.
    */
   start() {
+    this.stopped = false;
     if (!this.initialSyncPromise) {
-      this.initialSyncPromise = this.runFullSyncIntoStore(this.store)
-        .then(() => {
+      this.initialSyncPromise = this.ensureInitialSyncWithRetry().then(() => {
+        if (!this.stopped) {
           this.startPolling();
-        })
-        .catch((err) => {
-          console.error("[SyncService] Initial sync failed, will retry in background:", err);
-          this.startPolling();
-        });
+        }
+      });
     }
     return this.initialSyncPromise;
   }
 
   stop() {
+    this.stopped = true;
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
@@ -36,9 +43,38 @@ export class SyncService {
   }
 
   /**
-   * Performs a complete sync of sites, holidays, staff, and the entire change feed into `targetStore`.
+   * Retries initial synchronization until `this.store.isReady()` is true (or `stop()` is called).
+   * Preserves partial progress if the failure occurred mid-stream in `/v1/changes`.
+   */
+  async ensureInitialSyncWithRetry() {
+    let attempt = 0;
+    while (!this.stopped && !this.store.isReady()) {
+      attempt++;
+      try {
+        await this.runFullSyncIntoStore(this.store);
+      } catch (err) {
+        if (this.stopped) break;
+        const delay = Math.min(
+          this.initialRetryDelayMs * Math.pow(2, Math.min(attempt - 1, 4)),
+          this.maxInitialRetryDelayMs
+        );
+        console.error(
+          `[SyncService] Initial sync attempt #${attempt} failed (${
+            err instanceof Error ? err.message : String(err)
+          }). Retrying in ${delay}ms...`
+        );
+        await this.sleep(delay);
+      }
+    }
+  }
+
+  /**
+   * Performs a complete sync of sites, holidays, staff, and the change feed into `targetStore`.
+   * If `targetStore` already has a cursor from an interrupted attempt, resumes from that cursor
+   * unless it expired (410), in which case it resets from the beginning.
    */
   async runFullSyncIntoStore(targetStore) {
+    if (this.syncing) return;
     this.syncing = true;
     try {
       const [sites, staff] = await Promise.all([
@@ -57,22 +93,34 @@ export class SyncService {
         })
       );
 
-      // Drain /v1/changes from the beginning
-      let cursor = null;
+      // Drain /v1/changes (resume from targetStore.getLatestCursor() if partially synced)
+      let cursor = targetStore.getLatestCursor();
       let hasMore = true;
 
-      while (hasMore) {
-        const page = await this.client.getChanges(cursor, 500);
-        targetStore.applyChanges(page.data);
-        if (page.next_cursor) {
-          cursor = page.next_cursor;
-          targetStore.setLatestCursor(cursor);
+      while (hasMore && !this.stopped) {
+        try {
+          const page = await this.client.getChanges(cursor, 500);
+          targetStore.applyChanges(page.data);
+          if (page.next_cursor) {
+            cursor = page.next_cursor;
+            targetStore.setLatestCursor(cursor);
+          }
+          hasMore = Boolean(page.has_more && page.next_cursor);
+        } catch (err) {
+          if (err instanceof HelpdeskApiError && err.status === 410) {
+            // Cursor expired during bootstrap: restart feed from beginning
+            cursor = null;
+            targetStore.setLatestCursor(null);
+            continue;
+          }
+          throw err;
         }
-        hasMore = Boolean(page.has_more && page.next_cursor);
       }
 
-      targetStore.setLastSyncedAt(new Date().toISOString());
-      targetStore.setReady(true);
+      if (!this.stopped) {
+        targetStore.setLastSyncedAt(new Date().toISOString());
+        targetStore.setReady(true);
+      }
     } finally {
       this.syncing = false;
     }
@@ -83,7 +131,7 @@ export class SyncService {
    * Handles 410 Gone (expired cursor) by rebuilding a fresh store and swapping atomically.
    */
   async syncIncremental() {
-    if (this.syncing) return;
+    if (this.syncing || this.stopped) return;
 
     if (!this.store.isReady()) {
       await this.runFullSyncIntoStore(this.store);
@@ -95,7 +143,7 @@ export class SyncService {
       let cursor = this.store.getLatestCursor();
       let hasMore = true;
 
-      while (hasMore) {
+      while (hasMore && !this.stopped) {
         const page = await this.client.getChanges(cursor, 500);
         if (page.data.length > 0) {
           this.store.applyChanges(page.data);
@@ -124,7 +172,7 @@ export class SyncService {
   }
 
   startPolling() {
-    if (this.pollTimer || this.pollIntervalMs <= 0) return;
+    if (this.pollTimer || this.pollIntervalMs <= 0 || this.stopped) return;
     this.pollTimer = setInterval(() => {
       this.syncIncremental().catch((err) => {
         console.error("[SyncService] Incremental sync error:", err);
@@ -135,4 +183,3 @@ export class SyncService {
     }
   }
 }
-

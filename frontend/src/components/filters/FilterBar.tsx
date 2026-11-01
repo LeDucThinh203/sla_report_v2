@@ -9,9 +9,9 @@ export function FilterBar({ from, to, onChange }: DateRangeBarProps) {
     <section className="panel filter-panel">
       <div className="filter-header" style={{ marginBottom: 0 }}>
         <div>
-          <h2 className="panel-title">Global Report Date Range (/api/sla-report)</h2>
+          <h2 className="panel-title">Report Date Range</h2>
           <p className="panel-subtitle">
-            Applies to KPI Summary Cards, Responder Performance Breakdown, and Browse Requests
+            Select the date period to analyze SLA compliance and staff performance
           </p>
         </div>
 
@@ -43,7 +43,7 @@ export function FilterBar({ from, to, onChange }: DateRangeBarProps) {
 
           <div className="date-inputs-row">
             <label className="form-field-inline">
-              <span>From (Site Local):</span>
+              <span>From Date:</span>
               <input
                 type="date"
                 value={from}
@@ -52,7 +52,7 @@ export function FilterBar({ from, to, onChange }: DateRangeBarProps) {
             </label>
 
             <label className="form-field-inline">
-              <span>To (Site Local):</span>
+              <span>To Date:</span>
               <input
                 type="date"
                 value={to}

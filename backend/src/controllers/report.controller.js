@@ -42,6 +42,7 @@ export class ReportController {
 
     res.status(200).json({
       ready: this.store.isReady(),
+      data_version: this.store.getVersion(),
       last_synced_at: this.store.getLastSyncedAt(),
       total_requests_cached: this.store.getRequestsMap().size,
       sites,

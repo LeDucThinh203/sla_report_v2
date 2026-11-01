@@ -214,6 +214,11 @@ describe("Rule 3 & Rule 4: First response, business hours, weekends & holidays",
     assert.equal(row.responder, "Benjamin Tan Updated");
     assert.equal(row.response_business_minutes, 30);
     assert.equal(row.within_target, true);
+
+    // Verify Rule 3 strictly does NOT fallback to event.actor_name if staff is missing from /v1/staff
+    const emptyStaffRow = evaluateRequestSla(req, events, SINGAPORE_SITE, new Set(), new Map());
+    assert.equal(emptyStaffRow.responder_id, 304);
+    assert.equal(emptyStaffRow.responder, null);
   });
 });
 

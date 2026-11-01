@@ -69,6 +69,7 @@ export function evaluateRequestSla(
 
   // Rule 3: First response and responder
   // The earliest event (by `at`) with status `processing` and an `actor_id` (System events have `actor_id: null`).
+  // Its `actor_id` is the responder; show the current name from `/v1/staff`, not `actor_name` on the event.
   let firstResponseEvent = null;
   for (const ev of activeEvents) {
     if (ev.status === "processing" && ev.actor_id !== null && ev.actor_id !== undefined) {
@@ -84,8 +85,8 @@ export function evaluateRequestSla(
 
   if (firstResponseEvent && firstResponseEvent.actor_id !== null) {
     responderId = firstResponseEvent.actor_id;
-    responderName =
-      staffById.get(responderId) ?? firstResponseEvent.actor_name ?? null;
+    // Strictly use current name from `/v1/staff`, never `actor_name` on the event
+    responderName = staffById.get(responderId) ?? null;
 
     // Rule 4: Response minutes
     const createdAtUtcSec = Math.floor(Date.parse(request.created_at) / 1000);
@@ -150,11 +151,14 @@ export function aggregateResponders(requestRows, staffById) {
   for (const row of requestRows) {
     if (row.responder_id === null) continue;
 
+    const currentStaffName = staffById.get(row.responder_id);
+    if (currentStaffName === undefined) continue;
+
     let entry = map.get(row.responder_id);
     if (!entry) {
       entry = {
         id: row.responder_id,
-        name: staffById.get(row.responder_id) ?? row.responder ?? `Staff #${row.responder_id}`,
+        name: currentStaffName,
         requests: 0,
         within_target: 0,
         completed_late: 0,
@@ -216,4 +220,3 @@ export function buildSlaReport(
     responders,
   };
 }
-

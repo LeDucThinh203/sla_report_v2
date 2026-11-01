@@ -67,35 +67,34 @@ export function RequestsTable({
     <section className="panel">
       <div className="panel-header">
         <div>
-          <h2 className="panel-title">Browse Requests (/api/requests)</h2>
+          <h2 className="panel-title">Support Requests Directory</h2>
           <p className="panel-subtitle">
-            Server-side filtered, sorted, and cursor-paginated requests
+            Detailed response time and SLA evaluation for individual support requests
           </p>
         </div>
         <span className="badge badge-neutral" translate="no">
-          Page {pageIndex + 1} / {totalPages} · {totalFilteredCount.toLocaleString()} matching
+          Page {pageIndex + 1} / {totalPages} · {totalFilteredCount.toLocaleString()} requests
         </span>
       </div>
 
-      {/* Dedicated Filter Bar for Browse Requests (/api/requests) */}
       <div className="sub-filter-bar">
         <label className="form-field">
-          <span>Site (`site_id`)</span>
+          <span>Site Location</span>
           <select
             value={filters.site_id}
             onChange={(e) => onFilterChange({ site_id: e.target.value })}
           >
-            <option value="">All Sites</option>
+            <option value="">All Locations</option>
             {sites.map((s) => (
               <option key={s.id} value={String(s.id)}>
-                #{s.id} — {s.name} ({s.timezone})
+                {s.name} ({s.timezone})
               </option>
             ))}
           </select>
         </label>
 
         <label className="form-field">
-          <span>Responder (`responder_id`)</span>
+          <span>Assigned Responder</span>
           <select
             value={filters.responder_id}
             onChange={(e) => onFilterChange({ responder_id: e.target.value })}
@@ -103,55 +102,55 @@ export function RequestsTable({
             <option value="">All Responders</option>
             {staff.map((st) => (
               <option key={st.id} value={String(st.id)}>
-                {st.name} (#{st.id})
+                {st.name}
               </option>
             ))}
           </select>
         </label>
 
         <label className="form-field">
-          <span>Within SLA Target (`within_target`)</span>
+          <span>SLA Target Status</span>
           <select
             value={filters.within_target}
             onChange={(e) => onFilterChange({ within_target: e.target.value })}
           >
-            <option value="">All</option>
-            <option value="true">Within Target (true)</option>
-            <option value="false">Missed Target (false)</option>
+            <option value="">All Statuses</option>
+            <option value="true">Within Target</option>
+            <option value="false">Missed Target</option>
           </select>
         </label>
 
         <label className="form-field">
-          <span>Completed Late (`late`)</span>
+          <span>Completion Status</span>
           <select
             value={filters.late}
             onChange={(e) => onFilterChange({ late: e.target.value })}
           >
-            <option value="">All</option>
-            <option value="true">Completed Late (true)</option>
-            <option value="false">On Time (false)</option>
+            <option value="">All Completions</option>
+            <option value="false">Completed On Time</option>
+            <option value="true">Completed Late</option>
           </select>
         </label>
 
         <label className="form-field">
-          <span>Sort Order (`sort`)</span>
+          <span>Sort By</span>
           <select
             value={filters.sort}
             onChange={(e) => onFilterChange({ sort: e.target.value as SortField })}
           >
-            <option value="id">Request ID (Ascending)</option>
-            <option value="-id">Request ID (Descending)</option>
+            <option value="id">Request ID (Oldest First)</option>
+            <option value="-id">Request ID (Newest First)</option>
             <option value="response_business_minutes">
-              Response Minutes (Fastest First, Nulls Last)
+              Response Time (Fastest First)
             </option>
             <option value="-response_business_minutes">
-              Response Minutes (Slowest First, Nulls Last)
+              Response Time (Slowest First)
             </option>
           </select>
         </label>
 
         <label className="form-field">
-          <span>Page Size (`limit`)</span>
+          <span>Rows Per Page</span>
           <select
             value={String(filters.limit)}
             onChange={(e) => onFilterChange({ limit: Number(e.target.value) })}
@@ -179,7 +178,7 @@ export function RequestsTable({
                 })
               }
             >
-              Reset Request Filters
+              Reset Filter
             </button>
           </div>
         )}
@@ -196,11 +195,11 @@ export function RequestsTable({
               <thead>
                 <tr>
                   <th>Request ID</th>
-                  <th>Site</th>
-                  <th>Responder</th>
-                  <th className="num-col">Response Business Minutes</th>
-                  <th>SLA Status (within_target)</th>
-                  <th>Completion Status (completed_late)</th>
+                  <th>Site Location</th>
+                  <th>First Responder</th>
+                  <th className="num-col">Response Time (Business Hours)</th>
+                  <th>SLA Target Status</th>
+                  <th>Deadline Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -216,7 +215,7 @@ export function RequestsTable({
                           {site ? site.name : `Site #${row.site_id}`}
                         </div>
                         <div className="text-muted text-xs">
-                          ID: {row.site_id} {site ? `· ${site.timezone}` : ""}
+                          {site ? site.timezone : `ID: ${row.site_id}`}
                         </div>
                       </td>
                       <td>
@@ -228,7 +227,7 @@ export function RequestsTable({
                             </div>
                           </div>
                         ) : (
-                          <span className="badge badge-neutral">No Response</span>
+                          <span className="badge badge-neutral">Awaiting Response</span>
                         )}
                       </td>
                       <td className="num-col mono-cell" translate="no">
@@ -248,9 +247,7 @@ export function RequestsTable({
                           <span className="badge badge-warning">Missed Target</span>
                         )}
                         {row.within_target === null && (
-                          <span className="badge badge-neutral" translate="no">
-                            null
-                          </span>
+                          <span className="badge badge-neutral">Pending Response</span>
                         )}
                       </td>
                       <td>
@@ -258,12 +255,10 @@ export function RequestsTable({
                           <span className="badge badge-danger">Completed Late</span>
                         )}
                         {row.completed_late === false && (
-                          <span className="badge badge-success">On Time</span>
+                          <span className="badge badge-success">Completed On Time</span>
                         )}
                         {row.completed_late === null && (
-                          <span className="badge badge-neutral" translate="no">
-                            null
-                          </span>
+                          <span className="badge badge-neutral">In Progress / No Deadline</span>
                         )}
                       </td>
                     </tr>

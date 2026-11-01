@@ -169,6 +169,86 @@ describe("Level 2 & Level 3: Change-feed Sync, 410 Cursor Expiry & 12k Benchmark
     }
   });
 
+  test("automatically retries failed initial sync and transitions /ready to true upon recovery", async () => {
+    let failCount = 0;
+
+    const flakyServer = http.createServer((req, res) => {
+      const url = new URL(req.url || "/", "http://127.0.0.1");
+      res.setHeader("Content-Type", "application/json");
+
+      if (failCount < 2) {
+        failCount++;
+        res.statusCode = 503;
+        res.end(JSON.stringify({ error: "temporary upstream outage" }));
+        return;
+      }
+
+      if (url.pathname === "/v1/sites") {
+        res.end(
+          JSON.stringify({
+            data: [
+              {
+                id: 11,
+                name: "Singapore",
+                timezone: "Asia/Singapore",
+                business_hours: {
+                  mon: { open: "08:00", close: "18:00" },
+                  tue: null,
+                  wed: null,
+                  thu: null,
+                  fri: null,
+                  sat: null,
+                  sun: null,
+                },
+              },
+            ],
+          })
+        );
+        return;
+      }
+      if (url.pathname === "/v1/sites/11/holidays") {
+        res.end(JSON.stringify({ data: [] }));
+        return;
+      }
+      if (url.pathname === "/v1/staff") {
+        res.end(JSON.stringify({ data: [{ id: 304, name: "Benjamin Tan" }] }));
+        return;
+      }
+      if (url.pathname === "/v1/changes") {
+        res.end(JSON.stringify({ data: [], next_cursor: "c1", has_more: false }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+
+    await new Promise((resolve) => flakyServer.listen(0, resolve));
+    const addr = flakyServer.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+
+    try {
+      const store = new StoreRepository();
+      const client = new HelpdeskClient({
+        baseUrl: `http://127.0.0.1:${port}`,
+        token: "test",
+        maxRetries: 0,
+      });
+      const syncService = new SyncService(client, store, {
+        pollIntervalMs: 0,
+        initialRetryDelayMs: 20,
+        maxInitialRetryDelayMs: 50,
+      });
+
+      assert.equal(store.isReady(), false);
+      await syncService.start();
+      assert.equal(store.isReady(), true);
+      assert.ok(failCount >= 2);
+      syncService.stop();
+    } finally {
+      flakyServer.close();
+    }
+  });
+
   test("computes 6-month SLA report across 12,000 requests well under 10s requirement", () => {
     const store = new StoreRepository();
     store.setSites([

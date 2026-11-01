@@ -163,10 +163,12 @@ describe("API Contract: /api/sla-report and /api/requests", () => {
         [20, 10, 30]
       );
 
-      // Walk pages with limit=1 and verify every item appears once
+      // Walk pages with limit=1 and verify every item appears EXACTLY once even if data mutates mid-walk!
       const seenIds = [];
       let cursor = null;
+      let pageNum = 0;
       do {
+        pageNum++;
         const url = new URL(`${base}/api/requests`);
         url.searchParams.set("from", "2026-10-01");
         url.searchParams.set("to", "2026-10-31");
@@ -181,6 +183,20 @@ describe("API Contract: /api/sla-report and /api/requests", () => {
           seenIds.push(item.id);
         }
         cursor = pageBody.next_cursor;
+
+        // Mutate Request 10's response time after page 1 so it would shift after Request 20 if not snapshotted
+        if (pageNum === 1) {
+          const baseSec = Math.floor(Date.parse("2026-10-06T01:00:00Z") / 1000);
+          store.upsertEvent(10, {
+            id: 1001,
+            status: "processing",
+            at: baseSec + 180 * 60, // Changed from 30m to 180m mid-walk!
+            actor_id: 301,
+            actor_name: "Alice Lim",
+            due_at: "07/10/2026 10:00",
+            reverts_id: null,
+          });
+        }
       } while (cursor !== null);
 
       assert.deepEqual(seenIds, [10, 20, 30]);

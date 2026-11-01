@@ -75,10 +75,8 @@ export function Dashboard() {
 
         {!isReady && !error && (
           <div className="alert alert-info">
-            <strong>Synchronizing with Helpdesk Practice API...</strong> The
-            server is currently draining the change feed (`/v1/changes`). The
-            dashboard will populate automatically as soon as `/ready` returns
-            `200`.
+            <strong>Synchronizing Helpdesk Data...</strong> Please wait a moment
+            while the dashboard loads the latest support requests and SLA metrics.
           </div>
         )}
 

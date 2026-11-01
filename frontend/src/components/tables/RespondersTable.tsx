@@ -68,9 +68,9 @@ export function RespondersTable({
     <section className="panel">
       <div className="panel-header">
         <div>
-          <h2 className="panel-title">Responder Performance Breakdown (/api/sla-report)</h2>
+          <h2 className="panel-title">Responder Performance Breakdown</h2>
           <p className="panel-subtitle">
-            Aggregated staff metrics for the selected date range
+            Summary of handled requests, SLA target compliance, and late completions by staff member
           </p>
         </div>
         <span className="badge badge-neutral" translate="no">
@@ -80,41 +80,41 @@ export function RespondersTable({
 
       <div className="sub-filter-bar">
         <label className="form-field">
-          <span>Search Responder</span>
+          <span>Search Staff</span>
           <input
             type="text"
-            placeholder="Search by name or #ID..."
+            placeholder="Search by name or ID..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </label>
 
         <label className="form-field">
-          <span>Late Completion Filter</span>
+          <span>Deadline Performance</span>
           <select
             value={lateFilter}
             onChange={(e) =>
               setLateFilter(e.target.value as "all" | "with_late" | "zero_late")
             }
           >
-            <option value="all">All Responders</option>
-            <option value="with_late">Has Completed Late (&gt; 0)</option>
-            <option value="zero_late">Zero Completed Late (= 0)</option>
+            <option value="all">All Staff Members</option>
+            <option value="with_late">Has Late Completions</option>
+            <option value="zero_late">100% On-Time Completions</option>
           </select>
         </label>
 
         <label className="form-field">
-          <span>Sort Responders By</span>
+          <span>Sort By</span>
           <select
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value as ResponderSortKey)}
           >
             <option value="id">Staff ID (Ascending)</option>
-            <option value="name">Responder Name (A–Z)</option>
+            <option value="name">Staff Name (A–Z)</option>
             <option value="-requests">Most Requests Handled</option>
-            <option value="-within_target">Most Within Target</option>
-            <option value="-sla_rate">Highest SLA Compliance %</option>
-            <option value="-completed_late">Most Completed Late</option>
+            <option value="-within_target">Most Within SLA Target</option>
+            <option value="-sla_rate">Highest SLA Compliance Rate</option>
+            <option value="-completed_late">Most Late Completions</option>
           </select>
         </label>
 
@@ -129,7 +129,7 @@ export function RespondersTable({
                 setSortBy("id");
               }}
             >
-              Reset Table Filter
+              Reset Filter
             </button>
           </div>
         )}
@@ -146,11 +146,11 @@ export function RespondersTable({
               <tr>
                 <th>Staff ID</th>
                 <th>Responder Name</th>
-                <th className="num-col">Requests</th>
-                <th className="num-col">Within Target</th>
-                <th className="num-col">SLA Rate</th>
+                <th className="num-col">Requests Handled</th>
+                <th className="num-col">Within SLA Target</th>
+                <th className="num-col">SLA Compliance</th>
                 <th className="num-col">Completed Late</th>
-                <th>Action</th>
+                <th>Quick Filter</th>
               </tr>
             </thead>
             <tbody>
@@ -193,7 +193,7 @@ export function RespondersTable({
                           onSelectResponder(isSelected ? "" : String(resp.id))
                         }
                       >
-                        {isSelected ? "Clear in Requests" : "Filter in Requests ↓"}
+                        {isSelected ? "Show All Requests" : "View Requests ↓"}
                       </button>
                     </td>
                   </tr>

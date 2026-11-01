@@ -98,13 +98,14 @@ export function useReport(initialFilters: BrowseFilterState) {
         const meta = await fetchMetadata();
         setMetadata((prev) => {
           const becameReady = prev && !prev.ready && meta.ready;
-          const syncedChanged =
+          const versionChanged =
             prev &&
             meta.ready &&
-            prev.total_requests_cached !== meta.total_requests_cached;
+            (prev.data_version !== meta.data_version ||
+              prev.last_synced_at !== meta.last_synced_at);
           if (becameReady) {
             void loadFullData(filters);
-          } else if (syncedChanged) {
+          } else if (versionChanged) {
             const currentIdx = pageIndexRef.current;
             const currentCursor = cursorHistoryRef.current[currentIdx] ?? null;
             void Promise.all([

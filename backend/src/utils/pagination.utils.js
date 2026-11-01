@@ -48,8 +48,9 @@ export function decodeAndVerifyCursor(cursorStr, expectedFingerprint) {
       typeof parsed !== "object" ||
       parsed === null ||
       parsed.fp !== expectedFingerprint ||
-      typeof parsed.lastId !== "number" ||
-      (parsed.lastMinutes !== null && typeof parsed.lastMinutes !== "number")
+      typeof parsed.sid !== "string" ||
+      !Number.isSafeInteger(parsed.offset) ||
+      parsed.offset < 0
     ) {
       return null;
     }
@@ -92,20 +93,3 @@ export function compareRequestRows(a, b, sort) {
 
   return a.id - b.id;
 }
-
-/**
- * Returns true if `row` comes strictly AFTER the cursor position in the given sort order.
- */
-export function isRowAfterCursor(row, cursor, sort) {
-  const anchor = {
-    id: cursor.lastId,
-    site_id: 0,
-    responder_id: null,
-    responder: null,
-    response_business_minutes: cursor.lastMinutes,
-    within_target: null,
-    completed_late: null,
-  };
-  return compareRequestRows(row, anchor, sort) > 0;
-}
-
