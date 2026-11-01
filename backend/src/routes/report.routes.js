@@ -1,7 +1,6 @@
 import { Router } from "express";
-import { ReportController } from "../controllers/report.controller.js";
 
-export function createReportRouter(controller: ReportController): Router {
+export function createReportRouter(controller) {
   const router = Router();
   router.get("/api/sla-report", controller.getSlaReport);
   router.get("/api/requests", controller.browseRequests);

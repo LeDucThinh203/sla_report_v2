@@ -1,12 +1,12 @@
 # Helpdesk Performance Dashboard (`sla-report-v2`)
 
-A full-stack Helpdesk SLA Performance Dashboard built with **Node.js 22, Express 5, TypeScript, React 18, and Vite**. It computes exact business-hours response times, SLA target compliance, late completion metrics, responder breakdowns, and cursor-paginated request browsing across multiple timezones (`Asia/Singapore`, `Australia/Sydney`, `Asia/Jakarta`).
+A full-stack Helpdesk SLA Performance Dashboard built with **Node.js 22, Express 5 (JavaScript ES Modules), React 18, TypeScript, and Vite**. It computes exact business-hours response times, SLA target compliance, late completion metrics, responder breakdowns, and cursor-paginated request browsing across multiple timezones (`Asia/Singapore`, `Australia/Sydney`, `Asia/Jakarta`).
 
 ---
 
 ## Tech Stack
 
-- **Backend**: Node.js 22, Express 5, TypeScript, native `Intl.DateTimeFormat` timezone engine, native `node:test` runner (zero heavy external runtime dependencies).
+- **Backend**: Node.js 22, Express 5, JavaScript (ES Modules), native `Intl.DateTimeFormat` timezone engine, native `node --test` runner (zero heavy external runtime dependencies).
 - **Frontend**: React 18, TypeScript, Vite, responsive SaaS CSS.
 - **DevOps**: Docker (multi-stage build serving both API and static SPA on port `8080`) & Docker Compose.
 
@@ -18,25 +18,24 @@ A full-stack Helpdesk SLA Performance Dashboard built with **Node.js 22, Express
 sla-report-v2/
 ├── backend/
 │   ├── src/
-│   │   ├── config/env.ts                # Environment configuration
+│   │   ├── config/env.js                # Environment configuration
 │   │   ├── controllers/                 # Express route handlers (/health, /ready, /api/*)
 │   │   ├── middleware/                  # Strict query validation & error handling
-│   │   ├── repositories/store.repository.ts # Versioned in-memory data store
+│   │   ├── repositories/store.repository.js # Versioned in-memory data store
 │   │   ├── routes/                      # Express routers
 │   │   ├── services/
-│   │   │   ├── helpdesk.service.ts      # Rate-limit aware Helpdesk API client (429 Retry-After)
-│   │   │   ├── sync.service.ts          # Initial & live incremental /v1/changes sync + 410 recovery
-│   │   │   ├── sla.service.ts           # Pure implementation of all 7 SLA business rules
-│   │   │   └── report.service.ts        # Version-cached SLA report & keyset cursor pagination
-│   │   ├── types/                       # TypeScript interfaces
+│   │   │   ├── helpdesk.service.js      # Rate-limit aware Helpdesk API client (429 Retry-After)
+│   │   │   ├── sync.service.js          # Initial & live incremental /v1/changes sync + 410 recovery
+│   │   │   ├── sla.service.js           # Pure implementation of all 7 SLA business rules
+│   │   │   └── report.service.js        # Version-cached SLA report & keyset cursor pagination
+│   │   ├── types/                       # Shared domain constants
 │   │   ├── utils/
-│   │   │   ├── timezone.utils.ts        # IANA timezone wall-clock & business-hours calculator
-│   │   │   └── pagination.utils.ts      # HMAC-signed keyset cursor encoder/decoder
-│   │   ├── app.ts                       # Express app factory
-│   │   └── server.ts                    # HTTP server & background sync starter
-│   ├── tests/                           # Unit, integration, sync & 12k benchmark tests
-│   ├── package.json
-│   └── tsconfig.json
+│   │   │   ├── timezone.utils.js        # IANA timezone wall-clock & business-hours calculator
+│   │   │   └── pagination.utils.js      # HMAC-signed keyset cursor encoder/decoder
+│   │   ├── app.js                       # Express app factory
+│   │   └── server.js                    # HTTP server & background sync starter
+│   ├── tests/                           # Unit, integration, sync & 12k benchmark tests (*.test.js)
+│   └── package.json
 ├── frontend/
 │   ├── src/
 │   │   ├── components/                  # Header, SummaryCards, FilterBar, RespondersTable, RequestsTable

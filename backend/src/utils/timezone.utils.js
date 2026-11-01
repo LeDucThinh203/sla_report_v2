@@ -1,21 +1,8 @@
-import type { BusinessHoursMap, DayOfWeekKey, HelpdeskSite } from "../types/helpdesk.types.js";
+const DAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 
-const DAY_KEYS: DayOfWeekKey[] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const formatterCache = new Map();
 
-interface ZonedParts {
-  year: number;
-  month: number;
-  day: number;
-  hour: number;
-  minute: number;
-  second: number;
-  dateStr: string; // YYYY-MM-DD
-  dayOfWeekKey: DayOfWeekKey;
-}
-
-const formatterCache = new Map<string, Intl.DateTimeFormat>();
-
-function getFormatter(timezone: string): Intl.DateTimeFormat {
+function getFormatter(timezone) {
   let fmt = formatterCache.get(timezone);
   if (!fmt) {
     fmt = new Intl.DateTimeFormat("en-US", {
@@ -37,7 +24,7 @@ function getFormatter(timezone: string): Intl.DateTimeFormat {
 /**
  * Converts a UTC timestamp (in seconds) to local wall-clock parts in the given IANA timezone.
  */
-export function getZonedParts(utcSeconds: number, timezone: string): ZonedParts {
+export function getZonedParts(utcSeconds, timezone) {
   const fmt = getFormatter(timezone);
   const parts = fmt.formatToParts(new Date(utcSeconds * 1000));
   let year = 0;
@@ -85,7 +72,7 @@ export function getZonedParts(utcSeconds: number, timezone: string): ZonedParts 
 /**
  * Converts an ISO string (e.g. "2026-10-06T02:15:07Z") to local YYYY-MM-DD in the site's timezone.
  */
-export function isoToLocalDateString(isoStr: string, timezone: string): string {
+export function isoToLocalDateString(isoStr, timezone) {
   const ms = Date.parse(isoStr);
   if (Number.isNaN(ms)) {
     throw new Error(`Invalid ISO timestamp: ${isoStr}`);
@@ -97,7 +84,7 @@ export function isoToLocalDateString(isoStr: string, timezone: string): string {
 /**
  * Converts a holiday date from "DD/MM/YYYY" to "YYYY-MM-DD".
  */
-export function parseHolidayDateToIso(ddmmyyyy: string): string {
+export function parseHolidayDateToIso(ddmmyyyy) {
   const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(ddmmyyyy.trim());
   if (!match) {
     // If already YYYY-MM-DD, return as-is
@@ -116,14 +103,14 @@ export function parseHolidayDateToIso(ddmmyyyy: string): string {
  * Handles DST offsets accurately using iterative convergence.
  */
 export function localWallClockToUtcSeconds(
-  year: number,
-  month: number,
-  day: number,
-  hour: number,
-  minute: number,
-  second: number,
-  timezone: string
-): number {
+  year,
+  month,
+  day,
+  hour,
+  minute,
+  second,
+  timezone
+) {
   const targetAsUtcSeconds = Math.floor(
     Date.UTC(year, month - 1, day, hour, minute, second) / 1000
   );
@@ -152,7 +139,7 @@ export function localWallClockToUtcSeconds(
  * Parses a deadline string "DD/MM/YYYY HH:mm" in site-local wall-clock time
  * into Unix epoch seconds.
  */
-export function parseDueAtToUtcSeconds(dueAt: string, timezone: string): number {
+export function parseDueAtToUtcSeconds(dueAt, timezone) {
   const match = /^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(
     dueAt.trim()
   );
@@ -172,7 +159,7 @@ export function parseDueAtToUtcSeconds(dueAt: string, timezone: string): number 
 /**
  * Parses "HH:mm" to [hour, minute].
  */
-function parseHourMinute(hhmm: string): [number, number] {
+function parseHourMinute(hhmm) {
   const [h, m] = hhmm.split(":").map(Number);
   return [h || 0, m || 0];
 }
@@ -180,11 +167,7 @@ function parseHourMinute(hhmm: string): [number, number] {
 /**
  * Advances a calendar date (year, month, day) by 1 day.
  */
-function addOneCalendarDay(
-  year: number,
-  month: number,
-  day: number
-): { year: number; month: number; day: number; dateStr: string; dayOfWeekKey: DayOfWeekKey } {
+function addOneCalendarDay(year, month, day) {
   const nextUtc = new Date(Date.UTC(year, month - 1, day + 1));
   const y = nextUtc.getUTCFullYear();
   const m = nextUtc.getUTCMonth() + 1;
@@ -202,11 +185,11 @@ function addOneCalendarDay(
  * then floored to minutes. 0 if the response is earlier than or equal to `created_at`.
  */
 export function calculateBusinessMinutes(
-  startUtcSec: number,
-  endUtcSec: number,
-  site: HelpdeskSite,
-  holidayIsoDates: ReadonlySet<string>
-): number {
+  startUtcSec,
+  endUtcSec,
+  site,
+  holidayIsoDates
+) {
   if (endUtcSec <= startUtcSec) {
     return 0;
   }
@@ -218,10 +201,10 @@ export function calculateBusinessMinutes(
   let curMonth = startParts.month;
   let curDay = startParts.day;
   let curDateStr = startParts.dateStr;
-  let curDayOfWeek: DayOfWeekKey = startParts.dayOfWeekKey;
+  let curDayOfWeek = startParts.dayOfWeekKey;
 
   let totalBusinessSeconds = 0;
-  const businessHours: BusinessHoursMap = site.business_hours;
+  const businessHours = site.business_hours;
 
   // Iterate through each local calendar date from startParts.dateStr to endParts.dateStr inclusive
   while (curDateStr <= endParts.dateStr) {
@@ -277,7 +260,7 @@ export function calculateBusinessMinutes(
 /**
  * Validates that a string is a real calendar date in YYYY-MM-DD format.
  */
-export function isValidIsoDateString(value: unknown): value is string {
+export function isValidIsoDateString(value) {
   if (typeof value !== "string") return false;
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) return false;

@@ -1,18 +1,8 @@
 import crypto from "node:crypto";
-import type { BrowseRequestsQuery, RequestReportRow, SortField } from "../types/report.types.js";
 
 const CURSOR_SECRET = crypto.randomBytes(32);
 
-export interface CursorPayload {
-  /** Filter/sort fingerprint to detect mismatched query parameters across pages */
-  fp: string;
-  /** Last seen row's id */
-  lastId: number;
-  /** Last seen row's response_business_minutes (for minute-based sorts) */
-  lastMinutes: number | null;
-}
-
-export function buildFilterFingerprint(query: Omit<BrowseRequestsQuery, "cursor" | "limit">): string {
+export function buildFilterFingerprint(query) {
   return JSON.stringify({
     from: query.from,
     to: query.to,
@@ -24,7 +14,7 @@ export function buildFilterFingerprint(query: Omit<BrowseRequestsQuery, "cursor"
   });
 }
 
-export function encodeCursor(payload: CursorPayload): string {
+export function encodeCursor(payload) {
   const data = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   const sig = crypto
     .createHmac("sha256", CURSOR_SECRET)
@@ -33,10 +23,7 @@ export function encodeCursor(payload: CursorPayload): string {
   return `${data}.${sig}`;
 }
 
-export function decodeAndVerifyCursor(
-  cursorStr: string,
-  expectedFingerprint: string
-): CursorPayload | null {
+export function decodeAndVerifyCursor(cursorStr, expectedFingerprint) {
   if (!cursorStr || typeof cursorStr !== "string") return null;
   const parts = cursorStr.split(".");
   if (parts.length !== 2) return null;
@@ -56,7 +43,7 @@ export function decodeAndVerifyCursor(
   }
 
   try {
-    const parsed = JSON.parse(Buffer.from(data, "base64url").toString("utf8")) as CursorPayload;
+    const parsed = JSON.parse(Buffer.from(data, "base64url").toString("utf8"));
     if (
       typeof parsed !== "object" ||
       parsed === null ||
@@ -77,11 +64,7 @@ export function decodeAndVerifyCursor(
  * `id` (default), `-id`, `response_business_minutes`, `-response_business_minutes`.
  * Nulls last; ties by `id` ascending.
  */
-export function compareRequestRows(
-  a: RequestReportRow,
-  b: RequestReportRow,
-  sort: SortField
-): number {
+export function compareRequestRows(a, b, sort) {
   if (sort === "id") {
     return a.id - b.id;
   }
@@ -113,12 +96,8 @@ export function compareRequestRows(
 /**
  * Returns true if `row` comes strictly AFTER the cursor position in the given sort order.
  */
-export function isRowAfterCursor(
-  row: RequestReportRow,
-  cursor: CursorPayload,
-  sort: SortField
-): boolean {
-  const anchor: RequestReportRow = {
+export function isRowAfterCursor(row, cursor, sort) {
+  const anchor = {
     id: cursor.lastId,
     site_id: 0,
     responder_id: null,

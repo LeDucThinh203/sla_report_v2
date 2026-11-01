@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express from "express";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,13 +12,7 @@ import { ReportService } from "./services/report.service.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-export interface CreateAppOptions {
-  store?: StoreRepository;
-  reportService?: ReportService;
-  staticDir?: string;
-}
-
-export function createApp(options: CreateAppOptions = {}): Express {
+export function createApp(options = {}) {
   const app = express();
   const store = options.store ?? new StoreRepository();
   const reportService = options.reportService ?? new ReportService(store);
@@ -42,18 +36,12 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.use(createReportRouter(reportController));
 
   // Resolve static frontend directory:
-  // 1. Explicit options.staticDir
-  // 2. Built frontend inside ../../frontend/dist
-  // 3. Built public inside ../public
   const candidates = [
     options.staticDir,
     path.resolve(here, "..", "..", "frontend", "dist"),
-    path.resolve(here, "..", "..", "..", "frontend", "dist"),
     path.resolve(here, "..", "public"),
-    path.resolve(here, "..", "..", "public"),
     path.resolve(here, "..", "..", "starters", "node-express", "public"),
-    path.resolve(here, "..", "..", "..", "starters", "node-express", "public"),
-  ].filter((p): p is string => Boolean(p && fs.existsSync(p)));
+  ].filter((p) => Boolean(p && fs.existsSync(p)));
 
   if (candidates.length > 0) {
     const staticRoot = candidates[0];
@@ -64,3 +52,4 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
   return app;
 }
+

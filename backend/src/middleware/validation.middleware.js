@@ -1,15 +1,14 @@
-import type { BrowseRequestsQuery, SortField } from "../types/report.types.js";
 import { isValidIsoDateString } from "../utils/timezone.utils.js";
 import { BadRequestError } from "../services/report.service.js";
 
-const VALID_SORTS = new Set<SortField>([
+const VALID_SORTS = new Set([
   "id",
   "-id",
   "response_business_minutes",
   "-response_business_minutes",
 ]);
 
-function parseStrictPositiveInt(value: unknown, paramName: string): number {
+function parseStrictPositiveInt(value, paramName) {
   if (typeof value !== "string" || !/^\d+$/.test(value)) {
     throw new BadRequestError(`Invalid ${paramName}`);
   }
@@ -20,16 +19,13 @@ function parseStrictPositiveInt(value: unknown, paramName: string): number {
   return num;
 }
 
-function parseStrictBoolean(value: unknown, paramName: string): boolean {
+function parseStrictBoolean(value, paramName) {
   if (value === "true") return true;
   if (value === "false") return false;
   throw new BadRequestError(`Invalid ${paramName}: must be true or false`);
 }
 
-export function validateDateRangeParams(query: Record<string, unknown>): {
-  from: string;
-  to: string;
-} {
+export function validateDateRangeParams(query) {
   const { from, to } = query;
   if (!isValidIsoDateString(from) || !isValidIsoDateString(to)) {
     throw new BadRequestError("Missing or invalid 'from' or 'to' date (expected YYYY-MM-DD)");
@@ -40,37 +36,35 @@ export function validateDateRangeParams(query: Record<string, unknown>): {
   return { from, to };
 }
 
-export function validateBrowseRequestsParams(
-  query: Record<string, unknown>
-): BrowseRequestsQuery {
+export function validateBrowseRequestsParams(query) {
   const { from, to } = validateDateRangeParams(query);
 
-  let site_id: number | undefined;
+  let site_id;
   if (query.site_id !== undefined) {
     site_id = parseStrictPositiveInt(query.site_id, "site_id");
   }
 
-  let responder_id: number | undefined;
+  let responder_id;
   if (query.responder_id !== undefined) {
     responder_id = parseStrictPositiveInt(query.responder_id, "responder_id");
   }
 
-  let late: boolean | undefined;
+  let late;
   if (query.late !== undefined) {
     late = parseStrictBoolean(query.late, "late");
   }
 
-  let within_target: boolean | undefined;
+  let within_target;
   if (query.within_target !== undefined) {
     within_target = parseStrictBoolean(query.within_target, "within_target");
   }
 
-  let sort: SortField = "id";
+  let sort = "id";
   if (query.sort !== undefined) {
-    if (typeof query.sort !== "string" || !VALID_SORTS.has(query.sort as SortField)) {
+    if (typeof query.sort !== "string" || !VALID_SORTS.has(query.sort)) {
       throw new BadRequestError("Invalid sort parameter");
     }
-    sort = query.sort as SortField;
+    sort = query.sort;
   }
 
   let limit = 50;
@@ -81,7 +75,7 @@ export function validateBrowseRequestsParams(
     }
   }
 
-  let cursor: string | undefined;
+  let cursor;
   if (query.cursor !== undefined) {
     if (typeof query.cursor !== "string" || query.cursor.trim() === "") {
       throw new BadRequestError("Invalid cursor");

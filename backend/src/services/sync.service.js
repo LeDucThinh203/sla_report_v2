@@ -1,32 +1,20 @@
 import { StoreRepository } from "../repositories/store.repository.js";
-import { HelpdeskApiError, HelpdeskClient } from "./helpdesk.service.js";
-
-export interface SyncServiceOptions {
-  pollIntervalMs?: number;
-}
+import { HelpdeskApiError } from "./helpdesk.service.js";
 
 export class SyncService {
-  private readonly client: HelpdeskClient;
-  private readonly store: StoreRepository;
-  private readonly pollIntervalMs: number;
-  private pollTimer: ReturnType<typeof setInterval> | null = null;
-  private syncing = false;
-  private initialSyncPromise: Promise<void> | null = null;
-
-  constructor(
-    client: HelpdeskClient,
-    store: StoreRepository,
-    options: SyncServiceOptions = {}
-  ) {
+  constructor(client, store, options = {}) {
     this.client = client;
     this.store = store;
     this.pollIntervalMs = options.pollIntervalMs ?? 5000;
+    this.pollTimer = null;
+    this.syncing = false;
+    this.initialSyncPromise = null;
   }
 
   /**
    * Starts initial synchronization and schedules background polling for live changes.
    */
-  public start(): Promise<void> {
+  start() {
     if (!this.initialSyncPromise) {
       this.initialSyncPromise = this.runFullSyncIntoStore(this.store)
         .then(() => {
@@ -40,7 +28,7 @@ export class SyncService {
     return this.initialSyncPromise;
   }
 
-  public stop(): void {
+  stop() {
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
@@ -50,7 +38,7 @@ export class SyncService {
   /**
    * Performs a complete sync of sites, holidays, staff, and the entire change feed into `targetStore`.
    */
-  public async runFullSyncIntoStore(targetStore: StoreRepository): Promise<void> {
+  async runFullSyncIntoStore(targetStore) {
     this.syncing = true;
     try {
       const [sites, staff] = await Promise.all([
@@ -70,7 +58,7 @@ export class SyncService {
       );
 
       // Drain /v1/changes from the beginning
-      let cursor: string | null = null;
+      let cursor = null;
       let hasMore = true;
 
       while (hasMore) {
@@ -94,7 +82,7 @@ export class SyncService {
    * Polls `/v1/changes` from the latest cursor to pick up incremental updates within 60s.
    * Handles 410 Gone (expired cursor) by rebuilding a fresh store and swapping atomically.
    */
-  public async syncIncremental(): Promise<void> {
+  async syncIncremental() {
     if (this.syncing) return;
 
     if (!this.store.isReady()) {
@@ -135,7 +123,7 @@ export class SyncService {
     }
   }
 
-  private startPolling(): void {
+  startPolling() {
     if (this.pollTimer || this.pollIntervalMs <= 0) return;
     this.pollTimer = setInterval(() => {
       this.syncIncremental().catch((err) => {

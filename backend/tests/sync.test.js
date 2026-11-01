@@ -132,7 +132,7 @@ describe("Level 2 & Level 3: Change-feed Sync, 410 Cursor Expiry & 12k Benchmark
       res.end(JSON.stringify({ error: "not found" }));
     });
 
-    await new Promise<void>((resolve) => mockApi.listen(0, resolve));
+    await new Promise((resolve) => mockApi.listen(0, resolve));
     const addr = mockApi.address();
     const port = typeof addr === "object" && addr ? addr.port : 0;
 

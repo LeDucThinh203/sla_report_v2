@@ -20,10 +20,10 @@
 - **Tools used**: Antigravity (AI pair-programming assistant).
 - **What I asked & how it helped**:
   - Analyzed the starter kit (`docs/rules.md`, `docs/contract.md`, `docs/api.md`) to verify all edge cases across the 7 rules.
-  - Scaffolded the TypeScript project structure separating `backend/` (Express 5 + TypeScript + `node:test`) and `frontend/` (React 18 + Vite + TypeScript) while preserving the single `app` service contract in `docker-compose.yml` via a multi-stage `Dockerfile`.
+  - Scaffolded the project structure separating `backend/` (Node.js 22 + Express 5 ES Modules + `node --test`) and `frontend/` (React 18 + Vite + TypeScript) while preserving the single `app` service contract in `docker-compose.yml` via a multi-stage `Dockerfile`.
   - Assisted in writing unit and integration tests for timezone conversions, DST boundaries, `reverts_id` filtering, keyset cursor pagination, and the 12,000-request performance benchmark.
 - **What came back wrong & what I changed**:
-  - Initially, running `node --experimental-strip-types` directly on TypeScript test files failed to resolve `.js` specifiers required by `moduleResolution: "NodeNext"`. I changed the test script to compile TypeScript to `dist/` via `tsc` first and run `node --test dist/tests/*.test.js`, which works reliably in Node 22 both locally and inside the `node:22-slim` Docker container.
+  - Initially, the backend used TypeScript which required a compilation step (`tsc`) before running `node --test`. I converted the backend to pure ES Module JavaScript (`"type": "module"`) matching the official `starters/node-express` kit so `node src/server.js` and `node --test` execute directly without build overhead or extra devDependencies.
 
 ## Trade-offs and what I would do next
 

@@ -1,6 +1,5 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import type { HelpdeskEvent, HelpdeskRequest, HelpdeskSite } from "../src/types/helpdesk.types.js";
 import {
   calculateBusinessMinutes,
   isoToLocalDateString,
@@ -15,7 +14,7 @@ import {
   isWithinSlaTarget,
 } from "../src/services/sla.service.js";
 
-const SINGAPORE_SITE: HelpdeskSite = {
+const SINGAPORE_SITE = {
   id: 11,
   name: "Bluebay Tower Singapore",
   timezone: "Asia/Singapore", // UTC+8
@@ -30,7 +29,7 @@ const SINGAPORE_SITE: HelpdeskSite = {
   },
 };
 
-const SYDNEY_SITE: HelpdeskSite = {
+const SYDNEY_SITE = {
   id: 12,
   name: "Harbour View Sydney",
   timezone: "Australia/Sydney", // UTC+10 / UTC+11 (DST starts first Sunday of Oct)
@@ -45,7 +44,7 @@ const SYDNEY_SITE: HelpdeskSite = {
   },
 };
 
-const JAKARTA_SITE: HelpdeskSite = {
+const JAKARTA_SITE = {
   id: 13,
   name: "Sudirman Plaza Jakarta",
   timezone: "Asia/Jakarta", // UTC+7
@@ -62,10 +61,6 @@ const JAKARTA_SITE: HelpdeskSite = {
 
 describe("Rule 1: Which requests count & timezone date conversion", () => {
   test("converts UTC created_at to site local date across Singapore, Sydney, and Jakarta", () => {
-    // 2026-09-30T16:30:00Z:
-    // - Jakarta (UTC+7): 2026-09-30 23:30:00 -> 2026-09-30
-    // - Singapore (UTC+8): 2026-10-01 00:30:00 -> 2026-10-01
-    // - Sydney (UTC+10 on Sep 30): 2026-10-01 02:30:00 -> 2026-10-01
     const iso = "2026-09-30T16:30:00Z";
     assert.equal(isoToLocalDateString(iso, JAKARTA_SITE.timezone), "2026-09-30");
     assert.equal(isoToLocalDateString(iso, SINGAPORE_SITE.timezone), "2026-10-01");
@@ -73,7 +68,7 @@ describe("Rule 1: Which requests count & timezone date conversion", () => {
   });
 
   test("filters out canceled, deleted_at, merged_into_id, and out-of-range requests", () => {
-    const baseReq: HelpdeskRequest = {
+    const baseReq = {
       id: 1,
       site_id: 11,
       status: "processing",
@@ -113,7 +108,7 @@ describe("Rule 1: Which requests count & timezone date conversion", () => {
 
 describe("Rule 2: Undone events", () => {
   test("ignores both reverted event and reverting event", () => {
-    const events: HelpdeskEvent[] = [
+    const events = [
       {
         id: 100,
         status: "processing",
@@ -152,9 +147,6 @@ describe("Rule 2: Undone events", () => {
 
 describe("Rule 3 & Rule 4: First response, business hours, weekends & holidays", () => {
   test("calculates business minutes within a single workday and floors seconds to minutes", () => {
-    // 2026-10-06 is Tuesday.
-    // Created at 2026-10-06 09:00:00 SGT (01:00:00Z)
-    // First response at 2026-10-06 09:42:59 SGT (42m 59s -> floor to 42m)
     const startSec = Math.floor(Date.parse("2026-10-06T01:00:00Z") / 1000);
     const endSec = startSec + 42 * 60 + 59;
 
@@ -169,11 +161,6 @@ describe("Rule 3 & Rule 4: First response, business hours, weekends & holidays",
   });
 
   test("excludes overnight non-business hours, Sundays, and holidays", () => {
-    // Friday 2026-10-09 17:00 SGT (09:00 UTC) -> 1 hour left on Friday (closes 18:00)
-    // Saturday 2026-10-10 is a Holiday ("10/10/2026") -> 0 hours counted
-    // Sunday 2026-10-11 is closed (sun: null) -> 0 hours counted
-    // Monday 2026-10-12 opens 08:00 SGT, response at 08:30 SGT (00:30 UTC) -> 30 mins
-    // Total expected = 60 + 30 = 90 minutes.
     const startSec = Math.floor(Date.parse("2026-10-09T09:00:00Z") / 1000);
     const endSec = Math.floor(Date.parse("2026-10-12T00:30:00Z") / 1000);
     const holidays = new Set([parseHolidayDateToIso("10/10/2026")]);
@@ -183,10 +170,6 @@ describe("Rule 3 & Rule 4: First response, business hours, weekends & holidays",
   });
 
   test("handles Sydney DST transition accurately (Oct 4, 2026)", () => {
-    // In Australia/Sydney, DST starts Sunday 4 Oct 2026 at 02:00 AEST (UTC+10) -> 03:00 AEDT (UTC+11).
-    // Monday 5 Oct 2026 is AEDT (UTC+11).
-    // 08:30 AEDT on 2026-10-05 is 2026-10-04T21:30:00Z.
-    // 09:15 AEDT on 2026-10-05 is 2026-10-04T22:15:00Z.
     const startSec = Math.floor(Date.parse("2026-10-04T21:30:00Z") / 1000);
     const endSec = Math.floor(Date.parse("2026-10-04T22:15:00Z") / 1000);
     const mins = calculateBusinessMinutes(startSec, endSec, SYDNEY_SITE, new Set());
@@ -194,7 +177,7 @@ describe("Rule 3 & Rule 4: First response, business hours, weekends & holidays",
   });
 
   test("ignores System events (actor_id: null) when finding first response and uses current staff name", () => {
-    const req: HelpdeskRequest = {
+    const req = {
       id: 500,
       site_id: 11,
       status: "processing",
@@ -204,7 +187,7 @@ describe("Rule 3 & Rule 4: First response, business hours, weekends & holidays",
       merged_into_id: null,
     };
     const baseAt = Math.floor(Date.parse("2026-10-06T01:00:00Z") / 1000);
-    const events: HelpdeskEvent[] = [
+    const events = [
       {
         id: 1,
         status: "processing",
@@ -224,7 +207,7 @@ describe("Rule 3 & Rule 4: First response, business hours, weekends & holidays",
         reverts_id: null,
       },
     ];
-    const staffMap = new Map<number, string>([[304, "Benjamin Tan Updated"]]);
+    const staffMap = new Map([[304, "Benjamin Tan Updated"]]);
     const row = evaluateRequestSla(req, events, SINGAPORE_SITE, new Set(), staffMap);
 
     assert.equal(row.responder_id, 304);
@@ -252,7 +235,7 @@ describe("Rule 5: Within target thresholds", () => {
 
 describe("Rule 6 & Rule 7: Completed late and Nulls", () => {
   test("evaluates completed_late using last complete event and latest due_at event (even if reopened)", () => {
-    const req: HelpdeskRequest = {
+    const req = {
       id: 600,
       site_id: 11,
       status: "processing", // reopened!
@@ -262,11 +245,9 @@ describe("Rule 6 & Rule 7: Completed late and Nulls", () => {
       merged_into_id: null,
     };
 
-    // Deadline 1: 07/10/2026 10:00 SGT
-    // Deadline 2 (latest): 07/10/2026 12:00 SGT
     const deadline2Sec = parseDueAtToUtcSeconds("07/10/2026 12:00", SINGAPORE_SITE.timezone);
 
-    const events: HelpdeskEvent[] = [
+    const events = [
       {
         id: 1,
         status: "processing",
@@ -309,8 +290,7 @@ describe("Rule 6 & Rule 7: Completed late and Nulls", () => {
     const rowOnTime = evaluateRequestSla(req, events, SINGAPORE_SITE, new Set(), staffMap);
     assert.equal(rowOnTime.completed_late, false);
 
-    // Now add a later complete event 1 second after deadline2Sec
-    const eventsLate: HelpdeskEvent[] = [
+    const eventsLate = [
       ...events,
       {
         id: 5,
@@ -327,7 +307,7 @@ describe("Rule 6 & Rule 7: Completed late and Nulls", () => {
   });
 
   test("returns nulls when there is no first response or no complete/deadline", () => {
-    const req: HelpdeskRequest = {
+    const req = {
       id: 700,
       site_id: 11,
       status: "pending",
@@ -350,7 +330,7 @@ describe("Rule 6 & Rule 7: Completed late and Nulls", () => {
   });
 
   test("aggregates responder summaries accurately in buildSlaReport", () => {
-    const req1: HelpdeskRequest = {
+    const req1 = {
       id: 41210,
       site_id: 11,
       status: "complete",
@@ -359,7 +339,7 @@ describe("Rule 6 & Rule 7: Completed late and Nulls", () => {
       deleted_at: null,
       merged_into_id: null,
     };
-    const req2: HelpdeskRequest = {
+    const req2 = {
       id: 41214,
       site_id: 11,
       status: "pending",
@@ -370,7 +350,7 @@ describe("Rule 6 & Rule 7: Completed late and Nulls", () => {
     };
 
     const baseSec = Math.floor(Date.parse("2026-10-06T01:00:00Z") / 1000);
-    const eventsByReq = new Map<number, Map<number, HelpdeskEvent>>([
+    const eventsByReq = new Map([
       [
         41210,
         new Map([
@@ -403,7 +383,7 @@ describe("Rule 6 & Rule 7: Completed late and Nulls", () => {
     ]);
 
     const sitesMap = new Map([[11, SINGAPORE_SITE]]);
-    const holidaysMap = new Map([[11, new Set<string>()]]);
+    const holidaysMap = new Map([[11, new Set()]]);
     const staffMap = new Map([[304, "Benjamin Tan"]]);
 
     const report = buildSlaReport(

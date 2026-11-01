@@ -1,10 +1,3 @@
-import { StoreRepository } from "../repositories/store.repository.js";
-import type {
-  BrowseRequestsQuery,
-  BrowseRequestsResponse,
-  RequestReportRow,
-  SlaReportResponse,
-} from "../types/report.types.js";
 import {
   buildFilterFingerprint,
   compareRequestRows,
@@ -15,35 +8,28 @@ import {
 import { buildSlaReport } from "./sla.service.js";
 
 export class BadRequestError extends Error {
-  public readonly status = 400;
-  constructor(message: string) {
+  constructor(message) {
     super(message);
     this.name = "BadRequestError";
+    this.status = 400;
   }
 }
 
 export class ServiceUnavailableError extends Error {
-  public readonly status = 503;
   constructor(message = "Service is warming up, please retry shortly") {
     super(message);
     this.name = "ServiceUnavailableError";
+    this.status = 503;
   }
-}
-
-interface CachedReport {
-  version: number;
-  report: SlaReportResponse;
 }
 
 export class ReportService {
-  private readonly store: StoreRepository;
-  private readonly reportCache = new Map<string, CachedReport>();
-
-  constructor(store: StoreRepository) {
+  constructor(store) {
     this.store = store;
+    this.reportCache = new Map();
   }
 
-  public getSlaReport(from: string, to: string): SlaReportResponse {
+  getSlaReport(from, to) {
     if (!this.store.isReady()) {
       throw new ServiceUnavailableError();
     }
@@ -74,7 +60,7 @@ export class ReportService {
     return report;
   }
 
-  public browseRequests(query: BrowseRequestsQuery): BrowseRequestsResponse {
+  browseRequests(query) {
     if (!this.store.isReady()) {
       throw new ServiceUnavailableError();
     }
@@ -91,7 +77,7 @@ export class ReportService {
     const baseReport = this.getSlaReport(query.from, query.to);
 
     // Filter rows
-    const filtered: RequestReportRow[] = [];
+    const filtered = [];
     for (const row of baseReport.requests) {
       if (query.site_id !== undefined && row.site_id !== query.site_id) {
         continue;
@@ -119,7 +105,7 @@ export class ReportService {
     const pageData = afterCursor.slice(0, query.limit);
     const hasMore = afterCursor.length > query.limit;
 
-    let nextCursor: string | null = null;
+    let nextCursor = null;
     if (hasMore && pageData.length > 0) {
       const lastItem = pageData[pageData.length - 1];
       nextCursor = encodeCursor({

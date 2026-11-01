@@ -1,53 +1,47 @@
-import type {
-  HelpdeskChangeItem,
-  HelpdeskEvent,
-  HelpdeskHoliday,
-  HelpdeskRequest,
-  HelpdeskSite,
-  HelpdeskStaff,
-} from "../types/helpdesk.types.js";
 import { parseHolidayDateToIso } from "../utils/timezone.utils.js";
 
 export class StoreRepository {
-  private sites = new Map<number, HelpdeskSite>();
-  private holidaysBySite = new Map<number, Set<string>>();
-  private staff = new Map<number, string>();
-  private requests = new Map<number, HelpdeskRequest>();
-  private eventsByRequest = new Map<number, Map<number, HelpdeskEvent>>();
-  private latestCursor: string | null = null;
-  private ready = false;
-  private lastSyncedAt: string | null = null;
-  private version = 0;
+  constructor() {
+    this.sites = new Map();
+    this.holidaysBySite = new Map();
+    this.staff = new Map();
+    this.requests = new Map();
+    this.eventsByRequest = new Map();
+    this.latestCursor = null;
+    this.ready = false;
+    this.lastSyncedAt = null;
+    this.version = 0;
+  }
 
-  public isReady(): boolean {
+  isReady() {
     return this.ready;
   }
 
-  public setReady(value: boolean): void {
+  setReady(value) {
     this.ready = value;
   }
 
-  public getVersion(): number {
+  getVersion() {
     return this.version;
   }
 
-  public getLastSyncedAt(): string | null {
+  getLastSyncedAt() {
     return this.lastSyncedAt;
   }
 
-  public setLastSyncedAt(iso: string): void {
+  setLastSyncedAt(iso) {
     this.lastSyncedAt = iso;
   }
 
-  public getLatestCursor(): string | null {
+  getLatestCursor() {
     return this.latestCursor;
   }
 
-  public setLatestCursor(cursor: string | null): void {
+  setLatestCursor(cursor) {
     this.latestCursor = cursor;
   }
 
-  public setSites(sites: HelpdeskSite[]): void {
+  setSites(sites) {
     this.sites.clear();
     for (const s of sites) {
       this.sites.set(s.id, s);
@@ -55,8 +49,8 @@ export class StoreRepository {
     this.version++;
   }
 
-  public setHolidaysForSite(siteId: number, holidays: HelpdeskHoliday[]): void {
-    const isoSet = new Set<string>();
+  setHolidaysForSite(siteId, holidays) {
+    const isoSet = new Set();
     for (const h of holidays) {
       isoSet.add(parseHolidayDateToIso(h.date));
     }
@@ -64,7 +58,7 @@ export class StoreRepository {
     this.version++;
   }
 
-  public setStaffList(staffList: HelpdeskStaff[]): void {
+  setStaffList(staffList) {
     this.staff.clear();
     for (const st of staffList) {
       this.staff.set(st.id, st.name);
@@ -72,27 +66,27 @@ export class StoreRepository {
     this.version++;
   }
 
-  public upsertStaff(staff: HelpdeskStaff): void {
+  upsertStaff(staff) {
     this.staff.set(staff.id, staff.name);
     this.version++;
   }
 
-  public upsertRequest(request: HelpdeskRequest): void {
+  upsertRequest(request) {
     this.requests.set(request.id, request);
     this.version++;
   }
 
-  public upsertEvent(requestId: number, event: HelpdeskEvent): void {
+  upsertEvent(requestId, event) {
     let reqEvents = this.eventsByRequest.get(requestId);
     if (!reqEvents) {
-      reqEvents = new Map<number, HelpdeskEvent>();
+      reqEvents = new Map();
       this.eventsByRequest.set(requestId, reqEvents);
     }
     reqEvents.set(event.id, event);
     this.version++;
   }
 
-  public applyChanges(changes: HelpdeskChangeItem[]): void {
+  applyChanges(changes) {
     if (changes.length === 0) return;
 
     for (const item of changes) {
@@ -107,7 +101,7 @@ export class StoreRepository {
           if (item.request_id !== undefined && item.event) {
             let reqEvents = this.eventsByRequest.get(item.request_id);
             if (!reqEvents) {
-              reqEvents = new Map<number, HelpdeskEvent>();
+              reqEvents = new Map();
               this.eventsByRequest.set(item.request_id, reqEvents);
             }
             reqEvents.set(item.event.id, item.event);
@@ -126,7 +120,7 @@ export class StoreRepository {
   /**
    * Replaces all request, event, staff, site, and holiday data atomically from a freshly built store.
    */
-  public replaceFrom(other: StoreRepository): void {
+  replaceFrom(other) {
     this.sites = new Map(other.sites);
     this.holidaysBySite = new Map(other.holidaysBySite);
     this.staff = new Map(other.staff);
@@ -138,23 +132,23 @@ export class StoreRepository {
     this.version++;
   }
 
-  public getSitesMap(): ReadonlyMap<number, HelpdeskSite> {
+  getSitesMap() {
     return this.sites;
   }
 
-  public getHolidaysBySiteMap(): ReadonlyMap<number, ReadonlySet<string>> {
+  getHolidaysBySiteMap() {
     return this.holidaysBySite;
   }
 
-  public getStaffMap(): ReadonlyMap<number, string> {
+  getStaffMap() {
     return this.staff;
   }
 
-  public getRequestsMap(): ReadonlyMap<number, HelpdeskRequest> {
+  getRequestsMap() {
     return this.requests;
   }
 
-  public getEventsByRequestMap(): ReadonlyMap<number, ReadonlyMap<number, HelpdeskEvent>> {
+  getEventsByRequestMap() {
     return this.eventsByRequest;
   }
 }

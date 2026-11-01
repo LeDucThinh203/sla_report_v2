@@ -1,12 +1,6 @@
-import type { Request, Response, NextFunction } from "express";
 import { BadRequestError, ServiceUnavailableError } from "../services/report.service.js";
 
-export function errorHandler(
-  err: unknown,
-  _req: Request,
-  res: Response,
-  _next: NextFunction
-): void {
+export function errorHandler(err, _req, res, _next) {
   if (err instanceof BadRequestError) {
     res.status(400).json({ error: err.message });
     return;

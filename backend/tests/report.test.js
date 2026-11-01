@@ -2,10 +2,8 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/app.js";
 import { StoreRepository } from "../src/repositories/store.repository.js";
-import type { HelpdeskSite } from "../src/types/helpdesk.types.js";
-import type { BrowseRequestsResponse, SlaReportResponse } from "../src/types/report.types.js";
 
-const SITE_11: HelpdeskSite = {
+const SITE_11 = {
   id: 11,
   name: "Singapore HQ",
   timezone: "Asia/Singapore",
@@ -20,7 +18,7 @@ const SITE_11: HelpdeskSite = {
   },
 };
 
-function createPopulatedStore(): StoreRepository {
+function createPopulatedStore() {
   const store = new StoreRepository();
   store.setSites([SITE_11]);
   store.setHolidaysForSite(11, []);
@@ -135,7 +133,7 @@ describe("API Contract: /api/sla-report and /api/requests", () => {
       // Valid request
       const res = await fetch(`${base}/api/sla-report?from=2026-10-01&to=2026-10-31`);
       assert.equal(res.status, 200);
-      const body = (await res.json()) as SlaReportResponse;
+      const body = await res.json();
       assert.equal(body.from, "2026-10-01");
       assert.equal(body.to, "2026-10-31");
       assert.equal(body.requests.length, 3);
@@ -159,15 +157,15 @@ describe("API Contract: /api/sla-report and /api/requests", () => {
         `${base}/api/requests?from=2026-10-01&to=2026-10-31&sort=-response_business_minutes`
       );
       assert.equal(resSortDesc.status, 200);
-      const bodySortDesc = (await resSortDesc.json()) as BrowseRequestsResponse;
+      const bodySortDesc = await resSortDesc.json();
       assert.deepEqual(
         bodySortDesc.data.map((r) => r.id),
         [20, 10, 30]
       );
 
       // Walk pages with limit=1 and verify every item appears once
-      const seenIds: number[] = [];
-      let cursor: string | null = null;
+      const seenIds = [];
+      let cursor = null;
       do {
         const url = new URL(`${base}/api/requests`);
         url.searchParams.set("from", "2026-10-01");
@@ -178,7 +176,7 @@ describe("API Contract: /api/sla-report and /api/requests", () => {
 
         const pageRes = await fetch(url);
         assert.equal(pageRes.status, 200);
-        const pageBody = (await pageRes.json()) as BrowseRequestsResponse;
+        const pageBody = await pageRes.json();
         for (const item of pageBody.data) {
           seenIds.push(item.id);
         }

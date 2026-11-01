@@ -1,12 +1,4 @@
-export interface AppConfig {
-  port: number;
-  helpdeskUrl: string;
-  helpdeskToken: string;
-  syncPollIntervalMs: number;
-  cursorTtlMs: number;
-}
-
-export function getEnvConfig(): AppConfig {
+export function getEnvConfig() {
   return {
     port: Number(process.env.PORT || 8080),
     helpdeskUrl: (process.env.HELPDESK_URL || "http://localhost:4010").replace(/\/+$/, ""),

@@ -1,14 +1,3 @@
-import type {
-  HelpdeskEvent,
-  HelpdeskRequest,
-  HelpdeskSite,
-  RequestPriority,
-} from "../types/helpdesk.types.js";
-import type {
-  RequestReportRow,
-  ResponderSummaryRow,
-  SlaReportResponse,
-} from "../types/report.types.js";
 import {
   calculateBusinessMinutes,
   isoToLocalDateString,
@@ -20,12 +9,7 @@ import {
  * `created_at`, converted to the site's local date, is from `from` to `to` inclusive.
  * Skip requests with status `canceled`, with `deleted_at` set, or with `merged_into_id` set.
  */
-export function isRequestEligible(
-  request: HelpdeskRequest,
-  site: HelpdeskSite,
-  fromDate: string,
-  toDate: string
-): boolean {
+export function isRequestEligible(request, site, fromDate, toDate) {
   if (request.status === "canceled") return false;
   if (request.deleted_at !== null && request.deleted_at !== undefined) return false;
   if (request.merged_into_id !== null && request.merged_into_id !== undefined) return false;
@@ -39,8 +23,8 @@ export function isRequestEligible(
  * An event with `reverts_id` undoes the event it points at.
  * Ignore both the reverted event and the reverting event in every rule below.
  */
-export function filterActiveEvents(events: readonly HelpdeskEvent[]): HelpdeskEvent[] {
-  const ignoredIds = new Set<number>();
+export function filterActiveEvents(events) {
+  const ignoredIds = new Set();
 
   for (const ev of events) {
     if (ev.reverts_id !== null && ev.reverts_id !== undefined) {
@@ -60,10 +44,7 @@ export function filterActiveEvents(events: readonly HelpdeskEvent[]): HelpdeskEv
  * Rule 5: Within target.
  * `response_business_minutes` <= 60 for `High`, 240 for `Medium`, 480 for `Low` or `null` priority.
  */
-export function isWithinSlaTarget(
-  responseBusinessMinutes: number,
-  priority: RequestPriority
-): boolean {
+export function isWithinSlaTarget(responseBusinessMinutes, priority) {
   if (priority === "High") {
     return responseBusinessMinutes <= 60;
   }
@@ -78,17 +59,17 @@ export function isWithinSlaTarget(
  * Computes the report row for a single eligible request according to Rules 2 through 7.
  */
 export function evaluateRequestSla(
-  request: HelpdeskRequest,
-  rawEvents: readonly HelpdeskEvent[],
-  site: HelpdeskSite,
-  holidayIsoDates: ReadonlySet<string>,
-  staffById: ReadonlyMap<number, string>
-): RequestReportRow {
+  request,
+  rawEvents,
+  site,
+  holidayIsoDates,
+  staffById
+) {
   const activeEvents = filterActiveEvents(rawEvents);
 
   // Rule 3: First response and responder
   // The earliest event (by `at`) with status `processing` and an `actor_id` (System events have `actor_id: null`).
-  let firstResponseEvent: HelpdeskEvent | null = null;
+  let firstResponseEvent = null;
   for (const ev of activeEvents) {
     if (ev.status === "processing" && ev.actor_id !== null && ev.actor_id !== undefined) {
       firstResponseEvent = ev;
@@ -96,10 +77,10 @@ export function evaluateRequestSla(
     }
   }
 
-  let responderId: number | null = null;
-  let responderName: string | null = null;
-  let responseBusinessMinutes: number | null = null;
-  let withinTarget: boolean | null = null;
+  let responderId = null;
+  let responderName = null;
+  let responseBusinessMinutes = null;
+  let withinTarget = null;
 
   if (firstResponseEvent && firstResponseEvent.actor_id !== null) {
     responderId = firstResponseEvent.actor_id;
@@ -122,8 +103,8 @@ export function evaluateRequestSla(
   // Rule 6: Completed late
   // The last event with status `complete` (even if later events reopened the request) has `at` strictly after the deadline.
   // The deadline is the `due_at` of the latest event that has one, read as site-local wall-clock time.
-  let lastCompleteEvent: HelpdeskEvent | null = null;
-  let latestDueAtEvent: HelpdeskEvent | null = null;
+  let lastCompleteEvent = null;
+  let latestDueAtEvent = null;
 
   for (const ev of activeEvents) {
     if (ev.status === "complete") {
@@ -138,7 +119,7 @@ export function evaluateRequestSla(
     }
   }
 
-  let completedLate: boolean | null = null;
+  let completedLate = null;
   if (lastCompleteEvent && latestDueAtEvent && latestDueAtEvent.due_at) {
     const deadlineUtcSec = parseDueAtToUtcSeconds(
       latestDueAtEvent.due_at,
@@ -163,11 +144,8 @@ export function evaluateRequestSla(
  * Contract: "one row per responder in `requests`: current name, request count,
  * and how many of those were within target and completed late."
  */
-export function aggregateResponders(
-  requestRows: readonly RequestReportRow[],
-  staffById: ReadonlyMap<number, string>
-): ResponderSummaryRow[] {
-  const map = new Map<number, ResponderSummaryRow>();
+export function aggregateResponders(requestRows, staffById) {
+  const map = new Map();
 
   for (const row of requestRows) {
     if (row.responder_id === null) continue;
@@ -200,15 +178,15 @@ export function aggregateResponders(
  * Builds the complete SLA report for the given date range [from, to].
  */
 export function buildSlaReport(
-  from: string,
-  to: string,
-  requests: Iterable<HelpdeskRequest>,
-  eventsByRequestId: ReadonlyMap<number, ReadonlyMap<number, HelpdeskEvent>>,
-  sitesById: ReadonlyMap<number, HelpdeskSite>,
-  holidaysBySiteId: ReadonlyMap<number, ReadonlySet<string>>,
-  staffById: ReadonlyMap<number, string>
-): SlaReportResponse {
-  const reportRows: RequestReportRow[] = [];
+  from,
+  to,
+  requests,
+  eventsByRequestId,
+  sitesById,
+  holidaysBySiteId,
+  staffById
+) {
+  const reportRows = [];
 
   for (const req of requests) {
     const site = sitesById.get(req.site_id);
@@ -220,7 +198,7 @@ export function buildSlaReport(
 
     const eventMap = eventsByRequestId.get(req.id);
     const rawEvents = eventMap ? Array.from(eventMap.values()) : [];
-    const holidays = holidaysBySiteId.get(req.site_id) ?? new Set<string>();
+    const holidays = holidaysBySiteId.get(req.site_id) ?? new Set();
 
     const row = evaluateRequestSla(req, rawEvents, site, holidays, staffById);
     reportRows.push(row);
