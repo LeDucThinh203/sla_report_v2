@@ -35,12 +35,15 @@ These measurements were recorded using the practice dataset and may vary in othe
 
 ## 4. How I Used AI
 
-- **Tool used:** Antigravity, an AI coding assistant.
-- **Purpose:** I used AI to help review the requirements, organize the Node.js and React application, identify unusual data cases, and develop automated tests.
-- **What needed improvement:** An early synchronization approach could expose incomplete updates. I changed it to apply a complete batch of changes together.
-- **Pagination improvement:** I improved the handling of browsing sessions so they expire appropriately and invalid page positions are rejected.
-- **CSV improvement:** I separated CSV export handling from normal pagination because Excel downloads must include all matching requests, not just one page.
-- **My responsibility:** I reviewed the implementation against the provided rules and adjusted the code when the initial approach did not fully meet the requirements.
+- **Tools used:** Antigravity (AI coding assistant) and ChatGPT (OpenAI).
+- **Purpose:** I used AI to help analyze the assignment requirements, plan the Node.js and React application structure, assist with implementation, review code, investigate edge cases, and develop automated tests.
+- **Requirement clarification:** ChatGPT helped me review the implementation against the assignment, particularly the SLA rules, performance expectations, live synchronization, cursor pagination, and the additional CSV export requirement.
+- **Implementation support:** Antigravity assisted with developing and refining parts of the backend and frontend. AI-generated suggestions were reviewed and adjusted to fit the project's requirements.
+- **Issues and improvements:** During development, I identified areas that needed improvement, including incomplete synchronization updates, pagination consistency, expired cursor handling, and CSV exports that must include all matching records rather than only the current page.
+- **Validation:** I used automated tests, practice API data, and manual application checks to evaluate the implementation. AI-assisted reviews helped identify potential issues but were not treated as proof of correctness.
+- **My responsibility:** I remained responsible for the final implementation, engineering decisions, testing, and submission. I reviewed AI-assisted changes, made necessary adjustments, and documented the application's limitations and trade-offs.
+
+AI was used as a development and review assistant, not as a substitute for understanding the requirements or validating the final solution.
 
 ## 5. Trade-offs and What I Would Do Next
 
