@@ -53,3 +53,18 @@ export async function fetchBrowseRequests(
   return handleResponse<BrowseRequestsResponse>(res);
 }
 
+export function buildRequestsCsvUrl(filters: BrowseFilterState): string {
+  const params = new URLSearchParams({
+    from: filters.from,
+    to: filters.to,
+    sort: filters.sort,
+  });
+  if (filters.site_id) params.set("site_id", filters.site_id);
+  if (filters.responder_id) params.set("responder_id", filters.responder_id);
+  if (filters.within_target) params.set("within_target", filters.within_target);
+  if (filters.late) params.set("late", filters.late);
+
+  return `/api/requests.csv?${params.toString()}`;
+}
+
+

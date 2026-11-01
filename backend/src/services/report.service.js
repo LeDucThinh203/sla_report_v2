@@ -11,6 +11,7 @@ import {
   decodeAndVerifyCursor,
   encodeCursor,
 } from "../utils/pagination.utils.js";
+import { serializeRequestsToCsv } from "../utils/csv.utils.js";
 import { buildSlaReport } from "./sla.service.js";
 
 export class BadRequestError extends Error {
@@ -241,5 +242,20 @@ export class ReportService {
       fingerprint,
       snapshotId
     );
+  }
+
+  /**
+   * Evaluates, filters, and sorts all matching request rows (ignoring pagination limit/cursor)
+   * and serializes them into RFC 4180 CSV format.
+   */
+  exportRequestsCsv(query) {
+    if (!this.store.isReady()) {
+      throw new ServiceUnavailableError();
+    }
+
+    const baseReport = this.getSlaReport(query.from, query.to);
+    const filtered = this.filterRows(baseReport.requests, query);
+    const sorted = this.sortRows(filtered, query.sort);
+    return serializeRequestsToCsv(sorted);
   }
 }

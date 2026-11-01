@@ -134,6 +134,13 @@ body {
   margin-bottom: 1rem;
 }
 
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
 .panel-title {
   margin: 0;
   font-size: 1.05rem;
@@ -395,6 +402,17 @@ body {
 .btn-sm {
   padding: 0.35rem 0.7rem;
   font-size: 0.8125rem;
+}
+
+.btn-primary {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #ffffff;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
 .pagination-controls {

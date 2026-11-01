@@ -1,6 +1,7 @@
 import {
   validateBrowseRequestsParams,
   validateDateRangeParams,
+  validateExportRequestsCsvParams,
 } from "../middleware/validation.middleware.js";
 
 export class ReportController {
@@ -9,6 +10,7 @@ export class ReportController {
     this.store = store;
     this.getSlaReport = this.getSlaReport.bind(this);
     this.browseRequests = this.browseRequests.bind(this);
+    this.exportRequestsCsv = this.exportRequestsCsv.bind(this);
     this.getMetadata = this.getMetadata.bind(this);
   }
 
@@ -27,6 +29,21 @@ export class ReportController {
       const params = validateBrowseRequestsParams(req.query);
       const result = this.reportService.browseRequests(params);
       res.status(200).json(result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  exportRequestsCsv(req, res, next) {
+    try {
+      const params = validateExportRequestsCsvParams(req.query);
+      const csv = this.reportService.exportRequestsCsv(params);
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="requests-${params.from}-to-${params.to}.csv"`
+      );
+      res.status(200).end(csv, "utf-8");
     } catch (err) {
       next(err);
     }

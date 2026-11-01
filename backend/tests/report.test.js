@@ -159,6 +159,18 @@ function createPopulatedStore() {
   return store;
 }
 
+async function withServer(store, fn) {
+  const server = createApp({ store }).listen(0);
+  try {
+    await new Promise((resolve) => server.once("listening", resolve));
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    await fn(`http://127.0.0.1:${port}`);
+  } finally {
+    server.close();
+  }
+}
+
 describe("API Contract: /api/sla-report and /api/requests (Level 1 & Level 4)", () => {
   test("validates date range params on /api/sla-report (returns 400 on invalid)", async () => {
     const store = createPopulatedStore();
@@ -425,5 +437,94 @@ describe("API Contract: /api/sla-report and /api/requests (Level 1 & Level 4)", 
     });
     assert.deepEqual(page3A.data.map((r) => r.id), [35]);
     assert.equal(page3A.next_cursor, null);
+  });
+
+  test("GET /api/requests.csv exports exact header, booleans, empty nulls, filters, and sorts while ignoring limit and cursor", async () => {
+    await withServer(createPopulatedStore(), async (baseUrl) => {
+      // Request with sort=-response_business_minutes and ignored limit=1&cursor=invalid_cursor
+      const res = await fetch(
+        `${baseUrl}/api/requests.csv?from=2026-10-01&to=2026-10-31&sort=-response_business_minutes&limit=1&cursor=invalid_cursor`
+      );
+      assert.equal(res.status, 200);
+      assert.match(res.headers.get("content-type") ?? "", /^text\/csv\b/);
+
+      const text = await res.text();
+      const lines = text.trimEnd().split("\n");
+      assert.equal(
+        lines[0],
+        "id,site_id,responder_id,responder,response_business_minutes,within_target,completed_late"
+      );
+      assert.deepEqual(lines.slice(1), [
+        "20,11,302,Benjamin Tan,90,false,true",
+        "10,11,301,Alice Lim,30,true,false",
+        "15,12,301,Alice Lim,30,true,false",
+        "30,11,,,,,",
+        "35,12,,,,,",
+      ]);
+
+      // Filter by site_id=11 and within_target=true
+      const filteredRes = await fetch(
+        `${baseUrl}/api/requests.csv?from=2026-10-01&to=2026-10-31&site_id=11&within_target=true`
+      );
+      assert.equal(filteredRes.status, 200);
+      const filteredLines = (await filteredRes.text()).trimEnd().split("\n");
+      assert.deepEqual(filteredLines, [
+        "id,site_id,responder_id,responder,response_business_minutes,within_target,completed_late",
+        "10,11,301,Alice Lim,30,true,false",
+      ]);
+    });
+  });
+
+  test("GET /api/requests.csv properly escapes commas, double quotes, and line breaks and reflects live store updates", async () => {
+    const store = createPopulatedStore();
+    await withServer(store, async (baseUrl) => {
+      // Update staff member 301 with commas and double quotes, and 302 with a line break
+      store.upsertStaff({ id: 301, name: 'Lim, Alice "The Ace"' });
+      store.upsertStaff({ id: 302, name: "Benjamin\nTan" });
+
+      const res = await fetch(
+        `${baseUrl}/api/requests.csv?from=2026-10-01&to=2026-10-31&site_id=11&sort=id`
+      );
+      assert.equal(res.status, 200);
+      const csvText = await res.text();
+
+      const expectedCsv = [
+        "id,site_id,responder_id,responder,response_business_minutes,within_target,completed_late",
+        '10,11,301,"Lim, Alice ""The Ace""",30,true,false',
+        '20,11,302,"Benjamin\nTan",90,false,true',
+        "30,11,,,,,",
+        "",
+      ].join("\n");
+
+      assert.equal(csvText, expectedCsv);
+    });
+  });
+
+  test("GET /api/requests.csv exports all matching rows exceeding the 200-row pagination limit", async () => {
+    const store = createPopulatedStore();
+    // Populate 250 additional requests in October 2026 (total 255 rows > MAX_PAGE_LIMIT 200)
+    for (let i = 100; i < 350; i++) {
+      store.upsertRequest({
+        id: i,
+        site_id: 11,
+        status: "pending",
+        priority: "Low",
+        created_at: "2026-10-10T02:00:00Z",
+        deleted_at: null,
+        merged_into_id: null,
+      });
+    }
+
+    await withServer(store, async (baseUrl) => {
+      const res = await fetch(
+        `${baseUrl}/api/requests.csv?from=2026-10-01&to=2026-10-31&sort=-id`
+      );
+      assert.equal(res.status, 200);
+      const lines = (await res.text()).trimEnd().split("\n");
+      // 1 header line + 255 data lines = 256 lines
+      assert.equal(lines.length, 256);
+      assert.equal(lines[1], "349,11,,,,,");
+      assert.equal(lines[lines.length - 1], "10,11,301,Alice Lim,30,true,false");
+    });
   });
 });

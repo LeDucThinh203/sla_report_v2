@@ -37,7 +37,7 @@ export function validateDateRangeParams(query) {
   return { from, to };
 }
 
-export function validateBrowseRequestsParams(query) {
+export function validateExportRequestsCsvParams(query) {
   const { from, to } = validateDateRangeParams(query);
 
   let site_id;
@@ -68,6 +68,20 @@ export function validateBrowseRequestsParams(query) {
     sort = query.sort;
   }
 
+  return {
+    from,
+    to,
+    site_id,
+    responder_id,
+    late,
+    within_target,
+    sort,
+  };
+}
+
+export function validateBrowseRequestsParams(query) {
+  const filterAndSort = validateExportRequestsCsvParams(query);
+
   let limit = DEFAULT_PAGE_LIMIT;
   if (query.limit !== undefined) {
     limit = parseStrictPositiveInt(query.limit, "limit");
@@ -87,13 +101,7 @@ export function validateBrowseRequestsParams(query) {
   }
 
   return {
-    from,
-    to,
-    site_id,
-    responder_id,
-    late,
-    within_target,
-    sort,
+    ...filterAndSort,
     limit,
     cursor,
   };

@@ -31,10 +31,11 @@ sla-report-v2/
 │   │   ├── types/                       # Shared domain constants
 │   │   ├── utils/
 │   │   │   ├── timezone.utils.js        # IANA timezone wall-clock & business-hours calculator
-│   │   │   └── pagination.utils.js      # HMAC-signed cursor encoder/decoder
+│   │   │   ├── pagination.utils.js      # HMAC-signed cursor encoder/decoder
+│   │   │   └── csv.utils.js             # RFC 4180 CSV serializer for /api/requests.csv
 │   │   ├── app.js                       # Express app factory
 │   │   └── server.js                    # HTTP server & background sync starter
-│   ├── tests/                           # 24 unit, integration, sync & 12k benchmark tests (*.test.js)
+│   ├── tests/                           # 27 unit, integration, sync, CSV & 12k benchmark tests (*.test.js)
 │   └── package.json
 ├── frontend/
 │   ├── src/
@@ -121,5 +122,7 @@ npm start
   - **1-Month Report (`2026-10-01`..`2026-10-31`)**: **~233ms** cold cache | **~9ms** warm cache (limit: `< 5s`).
 - **Level 3 — Live Updates**:
   Polls `/v1/changes?cursor=...&limit=500` every 5 seconds in the background, buffering multi-page batches and applying them atomically so readers never see partial updates. Automatically handles `410 Gone` expired cursors by rebuilding a staging store and performing an atomic swap.
-- **Level 4 — Filtering, Sorting & Cursor Pagination (`GET /api/requests`)**:
-  Supports `from`, `to`, `site_id`, `responder_id`, `late`, `within_target`, `sort` (`id`, `-id`, `response_business_minutes`, `-response_business_minutes` with nulls last and tie-break by `id` ascending), `limit` (`1..200`), and HMAC-signed snapshot cursors (`cursor`) with TTL expiration and strict parameter/bounds validation (`400` on invalid cursor).
+- **Level 4 — Filtering, Sorting, Cursor Pagination & CSV Export (`GET /api/requests` & `GET /api/requests.csv`)**:
+  - `GET /api/requests`: Supports `from`, `to`, `site_id`, `responder_id`, `late`, `within_target`, `sort` (`id`, `-id`, `response_business_minutes`, `-response_business_minutes` with nulls last and tie-break by `id` ascending), `limit` (`1..200`), and HMAC-signed snapshot cursors (`cursor`) with TTL expiration and strict parameter/bounds validation (`400` on invalid cursor).
+  - `GET /api/requests.csv`: Accepts the exact same filtering and sorting parameters as `GET /api/requests`, ignores `limit` and `cursor`, and exports all matching rows as `text/csv` with header `id,site_id,responder_id,responder,response_business_minutes,within_target,completed_late` (booleans as `true`/`false`, `null` as empty fields, and full RFC 4180 escaping for commas, quotes, and line breaks). The **Support Requests Directory** panel in the React UI includes a **Download CSV** button that exports all matching rows using the currently selected filters and sort order.
+

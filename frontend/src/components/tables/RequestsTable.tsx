@@ -1,4 +1,5 @@
 import { useRef } from "react";
+import { buildRequestsCsvUrl } from "../../services/report.api";
 import type {
   BrowseFilterState,
   RequestReportRow,
@@ -63,6 +64,16 @@ export function RequestsTable({
     });
   };
 
+  const handleDownloadCsv = () => {
+    const csvUrl = buildRequestsCsvUrl(filters);
+    const link = document.createElement("a");
+    link.href = csvUrl;
+    link.setAttribute("download", `requests-${filters.from}-to-${filters.to}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <section className="panel">
       <div className="panel-header">
@@ -72,9 +83,20 @@ export function RequestsTable({
             Detailed response time and SLA evaluation for individual support requests
           </p>
         </div>
-        <span className="badge badge-neutral" translate="no">
-          Page {pageIndex + 1} / {totalPages} · {totalFilteredCount.toLocaleString()} requests
-        </span>
+        <div className="panel-header-actions">
+          <span className="badge badge-neutral" translate="no">
+            Page {pageIndex + 1} / {totalPages} · {totalFilteredCount.toLocaleString()} requests
+          </span>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={handleDownloadCsv}
+            disabled={loading}
+            title="Export all matching requests to CSV using current filters and sorting"
+          >
+            Download CSV
+          </button>
+        </div>
       </div>
 
       <div className="sub-filter-bar">
