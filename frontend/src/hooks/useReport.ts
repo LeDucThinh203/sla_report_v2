@@ -99,6 +99,12 @@ export function useReport(initialFilters: BrowseFilterState) {
     return () => clearInterval(timer);
   }, [filters, loadData]);
 
+  const goToFirstPage = async () => {
+    if (pageIndex <= 0 || loading) return;
+    const initialHistory: (string | null)[] = [null];
+    await loadData(filters, null, 0, initialHistory);
+  };
+
   const goToNextPage = async () => {
     if (!nextCursor || loading) return;
     const nextIdx = pageIndex + 1;
@@ -111,6 +117,40 @@ export function useReport(initialFilters: BrowseFilterState) {
     const prevIdx = pageIndex - 1;
     const prevCursor = cursorHistory[prevIdx] ?? null;
     await loadData(filters, prevCursor, prevIdx);
+  };
+
+  const goToLastPage = async () => {
+    if (!nextCursor || loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      let curIdx = pageIndex;
+      let curNext: string | null = nextCursor;
+      let history = [...cursorHistory.slice(0, curIdx + 1)];
+      let lastData: RequestReportRow[] = browseRows;
+
+      // Walk remaining cursor pages until next_cursor is null
+      let safety = 0;
+      while (curNext !== null && safety < 500) {
+        safety++;
+        const pageRes = await fetchBrowseRequests(filters, curNext);
+        curIdx += 1;
+        history.push(curNext);
+        lastData = pageRes.data;
+        curNext = pageRes.next_cursor;
+      }
+
+      setBrowseRows(lastData);
+      setNextCursor(null);
+      setPageIndex(curIdx);
+      pageIndexRef.current = curIdx;
+      setCursorHistory(history);
+      cursorHistoryRef.current = history;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to jump to last page");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const updateFilters = (patch: Partial<BrowseFilterState>) => {
@@ -131,8 +171,10 @@ export function useReport(initialFilters: BrowseFilterState) {
     browseRows,
     nextCursor,
     pageIndex,
+    goToFirstPage,
     goToNextPage,
     goToPrevPage,
+    goToLastPage,
     loading,
     error,
     refresh,

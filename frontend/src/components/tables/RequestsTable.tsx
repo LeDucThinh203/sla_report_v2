@@ -6,9 +6,12 @@ interface RequestsTableProps {
   sites: SiteInfo[];
   pageIndex: number;
   pageSize: number;
+  totalFilteredCount: number;
   hasNextPage: boolean;
+  onFirstPage: () => void;
   onPrevPage: () => void;
   onNextPage: () => void;
+  onLastPage: () => void;
   loading: boolean;
 }
 
@@ -17,14 +20,18 @@ export function RequestsTable({
   sites,
   pageIndex,
   pageSize,
+  totalFilteredCount,
   hasNextPage,
+  onFirstPage,
   onPrevPage,
   onNextPage,
+  onLastPage,
   loading,
 }: RequestsTableProps) {
   const siteMap = new Map(sites.map((s) => [s.id, s]));
   const startRowNum = rows.length > 0 ? pageIndex * pageSize + 1 : 0;
   const endRowNum = pageIndex * pageSize + rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalFilteredCount / pageSize));
 
   return (
     <section className="panel">
@@ -36,7 +43,7 @@ export function RequestsTable({
           </p>
         </div>
         <span className="badge badge-neutral" translate="no">
-          Page {pageIndex + 1} · Rows {startRowNum}–{endRowNum}
+          Page {pageIndex + 1} / {totalPages} · {totalFilteredCount.toLocaleString()} matching
         </span>
       </div>
 
@@ -130,26 +137,49 @@ export function RequestsTable({
 
           <div className="table-footer">
             <div className="footer-info" translate="no">
-              Showing rows <strong>{startRowNum}</strong> to{" "}
-              <strong>{endRowNum}</strong> (Page <strong>{pageIndex + 1}</strong>)
+              Showing <strong>{startRowNum}</strong>–<strong>{endRowNum}</strong> of{" "}
+              <strong>{totalFilteredCount.toLocaleString()}</strong> requests (Page{" "}
+              <strong>{pageIndex + 1}</strong> of <strong>{totalPages}</strong>)
             </div>
             <div className="pagination-controls" translate="no">
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
+                onClick={onFirstPage}
+                disabled={pageIndex === 0 || loading}
+                title="Go to first page"
+              >
+                ⏮ First
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
                 onClick={onPrevPage}
                 disabled={pageIndex === 0 || loading}
+                title="Go to previous page"
               >
-                ← Previous Page
+                ← Prev
               </button>
-              <span className="page-indicator">Page {pageIndex + 1}</span>
+              <span className="page-indicator">
+                Page {pageIndex + 1} / {totalPages}
+              </span>
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
                 onClick={onNextPage}
                 disabled={!hasNextPage || loading}
+                title="Go to next page"
               >
-                Next Page →
+                Next →
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={onLastPage}
+                disabled={!hasNextPage || loading}
+                title="Go to last page"
+              >
+                Last ⏭
               </button>
             </div>
           </div>
