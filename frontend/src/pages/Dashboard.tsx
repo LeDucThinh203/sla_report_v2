@@ -100,10 +100,10 @@ export function Dashboard() {
               pageSize={filters.limit}
               totalFilteredCount={totalFilteredCount}
               hasNextPage={Boolean(nextCursor)}
-              onFirstPage={() => void goToFirstPage()}
-              onPrevPage={() => void goToPrevPage()}
-              onNextPage={() => void goToNextPage()}
-              onLastPage={() => void goToLastPage()}
+              onFirstPage={goToFirstPage}
+              onPrevPage={goToPrevPage}
+              onNextPage={goToNextPage}
+              onLastPage={goToLastPage}
               loading={loading}
             />
           </>

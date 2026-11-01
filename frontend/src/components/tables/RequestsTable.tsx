@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import type { RequestReportRow, SiteInfo } from "../../types/report.types";
 import { formatMinutes } from "../../utils/formatters";
 
@@ -8,10 +9,10 @@ interface RequestsTableProps {
   pageSize: number;
   totalFilteredCount: number;
   hasNextPage: boolean;
-  onFirstPage: () => void;
-  onPrevPage: () => void;
-  onNextPage: () => void;
-  onLastPage: () => void;
+  onFirstPage: () => Promise<void> | void;
+  onPrevPage: () => Promise<void> | void;
+  onNextPage: () => Promise<void> | void;
+  onLastPage: () => Promise<void> | void;
   loading: boolean;
 }
 
@@ -28,10 +29,18 @@ export function RequestsTable({
   onLastPage,
   loading,
 }: RequestsTableProps) {
+  const footerRef = useRef<HTMLDivElement | null>(null);
   const siteMap = new Map(sites.map((s) => [s.id, s]));
   const startRowNum = rows.length > 0 ? pageIndex * pageSize + 1 : 0;
   const endRowNum = pageIndex * pageSize + rows.length;
   const totalPages = Math.max(1, Math.ceil(totalFilteredCount / pageSize));
+
+  const keepFooterAnchored = async (action: () => Promise<void> | void) => {
+    await action();
+    requestAnimationFrame(() => {
+      footerRef.current?.scrollIntoView({ block: "nearest" });
+    });
+  };
 
   return (
     <section className="panel">
@@ -135,7 +144,7 @@ export function RequestsTable({
             </table>
           </div>
 
-          <div className="table-footer">
+          <div className="table-footer" ref={footerRef}>
             <div className="footer-info" translate="no">
               Showing <strong>{startRowNum}</strong>–<strong>{endRowNum}</strong> of{" "}
               <strong>{totalFilteredCount.toLocaleString()}</strong> requests (Page{" "}
@@ -145,7 +154,7 @@ export function RequestsTable({
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                onClick={onFirstPage}
+                onClick={() => void keepFooterAnchored(onFirstPage)}
                 disabled={pageIndex === 0 || loading}
                 title="Go to first page"
               >
@@ -154,7 +163,7 @@ export function RequestsTable({
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                onClick={onPrevPage}
+                onClick={() => void keepFooterAnchored(onPrevPage)}
                 disabled={pageIndex === 0 || loading}
                 title="Go to previous page"
               >
@@ -166,7 +175,7 @@ export function RequestsTable({
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                onClick={onNextPage}
+                onClick={() => void keepFooterAnchored(onNextPage)}
                 disabled={!hasNextPage || loading}
                 title="Go to next page"
               >
@@ -175,7 +184,7 @@ export function RequestsTable({
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                onClick={onLastPage}
+                onClick={() => void keepFooterAnchored(onLastPage)}
                 disabled={!hasNextPage || loading}
                 title="Go to last page"
               >

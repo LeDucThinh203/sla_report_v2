@@ -25,30 +25,49 @@ export function useReport(initialFilters: BrowseFilterState) {
   const cursorHistoryRef = useRef<(string | null)[]>([null]);
   const pageIndexRef = useRef<number>(0);
 
-  const loadData = useCallback(
+  const loadFullData = useCallback(async (activeFilters: BrowseFilterState) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const meta = await fetchMetadata();
+      setMetadata(meta);
+
+      if (!meta.ready) {
+        setLoading(false);
+        return;
+      }
+
+      const [slaData, browseData] = await Promise.all([
+        fetchSlaReport(activeFilters.from, activeFilters.to),
+        fetchBrowseRequests(activeFilters, null),
+      ]);
+
+      const initialHistory: (string | null)[] = [null];
+      setReport(slaData);
+      setBrowseRows(browseData.data);
+      setNextCursor(browseData.next_cursor);
+      setPageIndex(0);
+      pageIndexRef.current = 0;
+      setCursorHistory(initialHistory);
+      cursorHistoryRef.current = initialHistory;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load report data");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const loadPageOnly = useCallback(
     async (
       activeFilters: BrowseFilterState,
-      cursor: string | null = null,
-      targetPageIndex = 0,
+      cursor: string | null,
+      targetPageIndex: number,
       newHistory?: (string | null)[]
     ) => {
       setLoading(true);
       setError(null);
       try {
-        const meta = await fetchMetadata();
-        setMetadata(meta);
-
-        if (!meta.ready) {
-          setLoading(false);
-          return;
-        }
-
-        const [slaData, browseData] = await Promise.all([
-          fetchSlaReport(activeFilters.from, activeFilters.to),
-          fetchBrowseRequests(activeFilters, cursor),
-        ]);
-
-        setReport(slaData);
+        const browseData = await fetchBrowseRequests(activeFilters, cursor);
         setBrowseRows(browseData.data);
         setNextCursor(browseData.next_cursor);
         setPageIndex(targetPageIndex);
@@ -59,7 +78,7 @@ export function useReport(initialFilters: BrowseFilterState) {
           cursorHistoryRef.current = newHistory;
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load report data");
+        setError(err instanceof Error ? err.message : "Failed to load page");
       } finally {
         setLoading(false);
       }
@@ -67,14 +86,12 @@ export function useReport(initialFilters: BrowseFilterState) {
     []
   );
 
-  // Reload from Page 1 (index 0) whenever filters change
+  // Reload full report + Page 1 whenever filters change
   useEffect(() => {
-    const initialHistory: (string | null)[] = [null];
-    void loadData(filters, null, 0, initialHistory);
-  }, [filters, loadData]);
+    void loadFullData(filters);
+  }, [filters, loadFullData]);
 
   // Poll metadata every 10s so warming-up state or live updates reflect automatically
-  // without resetting the user's current page!
   useEffect(() => {
     const timer = setInterval(async () => {
       try {
@@ -85,10 +102,19 @@ export function useReport(initialFilters: BrowseFilterState) {
             prev &&
             meta.ready &&
             prev.total_requests_cached !== meta.total_requests_cached;
-          if (becameReady || syncedChanged) {
+          if (becameReady) {
+            void loadFullData(filters);
+          } else if (syncedChanged) {
             const currentIdx = pageIndexRef.current;
             const currentCursor = cursorHistoryRef.current[currentIdx] ?? null;
-            void loadData(filters, currentCursor, currentIdx);
+            void Promise.all([
+              fetchSlaReport(filters.from, filters.to),
+              fetchBrowseRequests(filters, currentCursor),
+            ]).then(([slaData, browseData]) => {
+              setReport(slaData);
+              setBrowseRows(browseData.data);
+              setNextCursor(browseData.next_cursor);
+            });
           }
           return meta;
         });
@@ -97,26 +123,26 @@ export function useReport(initialFilters: BrowseFilterState) {
       }
     }, 10000);
     return () => clearInterval(timer);
-  }, [filters, loadData]);
+  }, [filters, loadFullData]);
 
   const goToFirstPage = async () => {
     if (pageIndex <= 0 || loading) return;
     const initialHistory: (string | null)[] = [null];
-    await loadData(filters, null, 0, initialHistory);
+    await loadPageOnly(filters, null, 0, initialHistory);
   };
 
   const goToNextPage = async () => {
     if (!nextCursor || loading) return;
     const nextIdx = pageIndex + 1;
     const updatedHistory = [...cursorHistory.slice(0, nextIdx), nextCursor];
-    await loadData(filters, nextCursor, nextIdx, updatedHistory);
+    await loadPageOnly(filters, nextCursor, nextIdx, updatedHistory);
   };
 
   const goToPrevPage = async () => {
     if (pageIndex <= 0 || loading) return;
     const prevIdx = pageIndex - 1;
     const prevCursor = cursorHistory[prevIdx] ?? null;
-    await loadData(filters, prevCursor, prevIdx);
+    await loadPageOnly(filters, prevCursor, prevIdx);
   };
 
   const goToLastPage = async () => {
@@ -126,10 +152,9 @@ export function useReport(initialFilters: BrowseFilterState) {
     try {
       let curIdx = pageIndex;
       let curNext: string | null = nextCursor;
-      let history = [...cursorHistory.slice(0, curIdx + 1)];
+      const history = [...cursorHistory.slice(0, curIdx + 1)];
       let lastData: RequestReportRow[] = browseRows;
 
-      // Walk remaining cursor pages until next_cursor is null
       let safety = 0;
       while (curNext !== null && safety < 500) {
         safety++;
@@ -157,10 +182,25 @@ export function useReport(initialFilters: BrowseFilterState) {
     setFilters((prev) => ({ ...prev, ...patch }));
   };
 
-  const refresh = () => {
+  const refresh = async () => {
     const currentIdx = pageIndexRef.current;
     const currentCursor = cursorHistoryRef.current[currentIdx] ?? null;
-    void loadData(filters, currentCursor, currentIdx);
+    setLoading(true);
+    try {
+      const [meta, slaData, browseData] = await Promise.all([
+        fetchMetadata(),
+        fetchSlaReport(filters.from, filters.to),
+        fetchBrowseRequests(filters, currentCursor),
+      ]);
+      setMetadata(meta);
+      setReport(slaData);
+      setBrowseRows(browseData.data);
+      setNextCursor(browseData.next_cursor);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return {
@@ -177,6 +217,6 @@ export function useReport(initialFilters: BrowseFilterState) {
     goToLastPage,
     loading,
     error,
-    refresh,
+    refresh: () => void refresh(),
   };
 }
