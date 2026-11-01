@@ -364,4 +364,57 @@ describe("API Contract: /api/sla-report and /api/requests (Level 1 & Level 4)", 
       { name: "BadRequestError" }
     );
   });
+
+  test("continues pagination walk seamlessly via signed keyset anchor even if LRU evicts snapshot before TTL expires", () => {
+    const store = createPopulatedStore();
+    const tinyCacheService = new ReportService(store, {
+      maxSnapshots: 1,
+      snapshotTtlMs: 60000,
+    });
+
+    // Session A starts page 1
+    const page1A = tinyCacheService.browseRequests({
+      from: "2026-10-01",
+      to: "2026-10-31",
+      sort: "-response_business_minutes",
+      limit: 2,
+    });
+    assert.deepEqual(page1A.data.map((r) => r.id), [20, 10]);
+    assert.ok(page1A.next_cursor);
+
+    // Session B and Session C start, evicting Session A's in-memory snapshot from the 1-slot LRU cache
+    tinyCacheService.browseRequests({
+      from: "2026-10-01",
+      to: "2026-10-31",
+      sort: "id",
+      limit: 2,
+    });
+    tinyCacheService.browseRequests({
+      from: "2026-10-01",
+      to: "2026-10-31",
+      sort: "-id",
+      limit: 2,
+    });
+
+    // Session A requests page 2 and page 3: seamlessly recovers via keyset anchor without 400!
+    const page2A = tinyCacheService.browseRequests({
+      from: "2026-10-01",
+      to: "2026-10-31",
+      sort: "-response_business_minutes",
+      limit: 2,
+      cursor: page1A.next_cursor,
+    });
+    assert.deepEqual(page2A.data.map((r) => r.id), [15, 30]);
+    assert.ok(page2A.next_cursor);
+
+    const page3A = tinyCacheService.browseRequests({
+      from: "2026-10-01",
+      to: "2026-10-31",
+      sort: "-response_business_minutes",
+      limit: 2,
+      cursor: page2A.next_cursor,
+    });
+    assert.deepEqual(page3A.data.map((r) => r.id), [35]);
+    assert.equal(page3A.next_cursor, null);
+  });
 });

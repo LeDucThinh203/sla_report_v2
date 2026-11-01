@@ -12,8 +12,8 @@ export class SyncService {
     this.syncing = false;
     this.stopped = false;
     this.initialSyncPromise = null;
-    this.stagingCursor = null;
     this.stagingStore = null;
+    this.rebuildStore = null;
   }
 
   async sleep(ms) {
@@ -70,6 +70,23 @@ export class SyncService {
     }
   }
 
+  async populateMetadataIntoStore(workStore) {
+    const [sites, staff] = await Promise.all([
+      this.client.getSites(),
+      this.client.getStaff(),
+    ]);
+
+    workStore.setSites(sites);
+    workStore.setStaffList(staff);
+
+    await Promise.all(
+      sites.map(async (site) => {
+        const holidays = await this.client.getSiteHolidays(site.id);
+        workStore.setHolidaysForSite(site.id, holidays);
+      })
+    );
+  }
+
   /**
    * Performs a complete sync of sites, holidays, staff, and the change feed into `targetStore`.
    * Stages all data in a temporary buffer if `targetStore` is not yet ready so that `targetStore`
@@ -85,20 +102,7 @@ export class SyncService {
           : targetStore;
 
       if (workStore.getSitesMap().size === 0) {
-        const [sites, staff] = await Promise.all([
-          this.client.getSites(),
-          this.client.getStaff(),
-        ]);
-
-        workStore.setSites(sites);
-        workStore.setStaffList(staff);
-
-        await Promise.all(
-          sites.map(async (site) => {
-            const holidays = await this.client.getSiteHolidays(site.id);
-            workStore.setHolidaysForSite(site.id, holidays);
-          })
-        );
+        await this.populateMetadataIntoStore(workStore);
       }
 
       let cursor = workStore.getLatestCursor();
@@ -115,23 +119,12 @@ export class SyncService {
           hasMore = Boolean(page.has_more && page.next_cursor);
         } catch (err) {
           if (err instanceof HelpdeskApiError && err.status === 410) {
-            // Cursor expired during bootstrap: reset workStore and restart feed from beginning
-            const sites = Array.from(workStore.getSitesMap().values());
-            const staff = Array.from(workStore.getStaffMap().entries()).map(
-              ([id, name]) => ({ id, name })
-            );
-            const holidaysSnapshot = new Map(workStore.getHolidaysBySiteMap());
+            // Cursor expired during bootstrap/rebuild: reset workStore cleanly, re-fetch metadata, and restart feed
             const cleanStore = new StoreRepository();
-            cleanStore.setSites(sites);
-            cleanStore.setStaffList(staff);
-            for (const [siteId, set] of holidaysSnapshot.entries()) {
-              cleanStore.setHolidaysForSite(
-                siteId,
-                Array.from(set).map((date) => ({ date, name: "" }))
-              );
-            }
+            await this.populateMetadataIntoStore(cleanStore);
             workStore.replaceFrom(cleanStore);
             cursor = null;
+            hasMore = true;
             continue;
           }
           throw err;
@@ -155,13 +148,25 @@ export class SyncService {
    * Polls `/v1/changes` from the latest cursor to pick up incremental updates within 60s.
    * Buffers all pages of an incremental batch and applies them in a single atomic commit
    * so concurrent report readers never observe half-applied multi-page updates.
-   * Handles 410 Gone (expired cursor) by rebuilding a fresh store and swapping atomically.
+   * Handles 410 Gone (expired cursor) by rebuilding a staging store (persisted across retries
+   * if transient errors occur during the rebuild) and swapping atomically once complete.
    */
   async syncIncremental() {
     if (this.syncing || this.stopped) return;
 
     if (!this.store.isReady()) {
       await this.runFullSyncIntoStore(this.store);
+      return;
+    }
+
+    // If a previous 410 triggered a background rebuild that was interrupted by a transient error,
+    // resume draining into `this.rebuildStore` and swap atomically once complete.
+    if (this.rebuildStore) {
+      await this.runFullSyncIntoStore(this.rebuildStore);
+      if (this.rebuildStore.isReady() && !this.stopped) {
+        this.store.replaceFrom(this.rebuildStore);
+        this.rebuildStore = null;
+      }
       return;
     }
 
@@ -193,11 +198,14 @@ export class SyncService {
       }
     } catch (err) {
       if (err instanceof HelpdeskApiError && err.status === 410) {
-        // Cursor expired after 15 minutes: rebuild into a temporary store and swap atomically
+        // Cursor expired after 15 minutes: rebuild into `this.rebuildStore` and swap atomically
         this.syncing = false;
-        const freshStore = new StoreRepository();
-        await this.runFullSyncIntoStore(freshStore);
-        this.store.replaceFrom(freshStore);
+        this.rebuildStore = new StoreRepository();
+        await this.runFullSyncIntoStore(this.rebuildStore);
+        if (this.rebuildStore.isReady() && !this.stopped) {
+          this.store.replaceFrom(this.rebuildStore);
+          this.rebuildStore = null;
+        }
         return;
       }
       throw err;

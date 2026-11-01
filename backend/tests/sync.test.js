@@ -290,6 +290,185 @@ describe("Level 2 & Level 3: Change-feed Sync, 429 Retry-After, 410 Expiry, Mult
     }
   });
 
+  test("recovers from 410 cursor expiry combined with repeated transient 503 errors during multi-page rebuild", async () => {
+    const baseSec = Math.floor(Date.parse("2026-10-06T01:00:00Z") / 1000);
+    let phase = "bootstrap-410";
+    let transient503Remaining = 2;
+
+    const server = http.createServer((req, res) => {
+      const url = new URL(req.url || "/", "http://127.0.0.1");
+      res.setHeader("Content-Type", "application/json");
+
+      if (url.pathname === "/v1/sites") {
+        res.end(
+          JSON.stringify({
+            data: [
+              {
+                id: 11,
+                name: "Singapore",
+                timezone: "Asia/Singapore",
+                business_hours: {
+                  mon: { open: "08:00", close: "18:00" },
+                  tue: { open: "08:00", close: "18:00" },
+                  wed: { open: "08:00", close: "18:00" },
+                  thu: { open: "08:00", close: "18:00" },
+                  fri: { open: "08:00", close: "18:00" },
+                  sat: null,
+                  sun: null,
+                },
+              },
+            ],
+          })
+        );
+        return;
+      }
+      if (url.pathname === "/v1/sites/11/holidays") {
+        res.end(JSON.stringify({ data: [] }));
+        return;
+      }
+      if (url.pathname === "/v1/staff") {
+        res.end(JSON.stringify({ data: [{ id: 304, name: "Resilient Staff" }] }));
+        return;
+      }
+      if (url.pathname === "/v1/changes") {
+        const cursor = url.searchParams.get("cursor");
+
+        // During bootstrap, simulate cursor expiring on page 2 once
+        if (phase === "bootstrap-410" && cursor === "boot-p1") {
+          phase = "bootstrap-clean";
+          res.statusCode = 410;
+          res.end(JSON.stringify({ error: "cursor expired mid-bootstrap" }));
+          return;
+        }
+
+        // During live incremental sync, expire active cursor and inject 503s on page 2 of rebuild
+        if (phase === "live-expire" && cursor === "boot-p2") {
+          phase = "live-rebuilding";
+          res.statusCode = 410;
+          res.end(JSON.stringify({ error: "cursor expired in live sync" }));
+          return;
+        }
+
+        if (phase === "live-rebuilding" && cursor === "boot-p1" && transient503Remaining > 0) {
+          transient503Remaining--;
+          res.statusCode = 503;
+          res.end(JSON.stringify({ error: "flaky network during 410 rebuild" }));
+          return;
+        }
+
+        if (!cursor) {
+          res.end(
+            JSON.stringify({
+              data: [
+                {
+                  seq: 1,
+                  type: "request.created",
+                  at: "2026-10-06T01:00:00Z",
+                  request: {
+                    id: 201,
+                    site_id: 11,
+                    status: "processing",
+                    priority: "High",
+                    created_at: "2026-10-06T01:00:00Z",
+                    deleted_at: null,
+                    merged_into_id: null,
+                  },
+                },
+              ],
+              next_cursor: "boot-p1",
+              has_more: true,
+            })
+          );
+          return;
+        }
+
+        if (cursor === "boot-p1") {
+          const items = [
+            {
+              seq: 2,
+              type: "event.created",
+              at: "2026-10-06T01:15:00Z",
+              request_id: 201,
+              event: {
+                id: 9001,
+                status: "processing",
+                at: baseSec + 15 * 60,
+                actor_id: 304,
+                actor_name: "Old",
+                due_at: "06/10/2026 17:00",
+                reverts_id: null,
+              },
+            },
+          ];
+          if (phase === "live-rebuilding") {
+            items.push({
+              seq: 3,
+              type: "request.created",
+              at: "2026-10-06T02:00:00Z",
+              request: {
+                id: 202,
+                site_id: 11,
+                status: "open",
+                priority: "Low",
+                created_at: "2026-10-06T02:00:00Z",
+                deleted_at: null,
+                merged_into_id: null,
+              },
+            });
+          }
+          res.end(
+            JSON.stringify({
+              data: items,
+              next_cursor: "boot-p2",
+              has_more: false,
+            })
+          );
+          return;
+        }
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+
+    await new Promise((resolve) => server.listen(0, resolve));
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+
+    try {
+      const store = new StoreRepository();
+      const client = new HelpdeskClient({
+        baseUrl: `http://127.0.0.1:${port}`,
+        token: "test",
+        maxRetries: 0,
+      });
+      const syncService = new SyncService(client, store, { pollIntervalMs: 0 });
+      const reportService = new ReportService(store);
+
+      // 1. Bootstrap recovers from 410 on page 2 and completes cleanly
+      await syncService.runFullSyncIntoStore(store);
+      assert.equal(store.isReady(), true);
+      assert.equal(reportService.getSlaReport("2026-10-01", "2026-10-31").requests.length, 1);
+
+      // 2. Trigger live 410 + two consecutive 503 failures on page 2 of rebuild
+      phase = "live-expire";
+      await assert.rejects(() => syncService.syncIncremental());
+      // Active store must STILL be ready and serving the 1 existing request while rebuild is incomplete
+      assert.equal(store.isReady(), true);
+      assert.equal(reportService.getSlaReport("2026-10-01", "2026-10-31").requests.length, 1);
+
+      // Second poll attempt still hits 503 on page 2
+      await assert.rejects(() => syncService.syncIncremental());
+      assert.equal(store.isReady(), true);
+
+      // Third poll attempt finishes draining `rebuildStore` from `boot-p1` and swaps atomically
+      await syncService.syncIncremental();
+      const finalReport = reportService.getSlaReport("2026-10-01", "2026-10-31");
+      assert.equal(finalReport.requests.length, 2);
+    } finally {
+      server.close();
+    }
+  });
+
   test("computes 6-month SLA report across 12,000 requests and 3 sites (SG, SYD, JKT) well under 10s requirement", () => {
     const store = new StoreRepository();
     store.setSites([

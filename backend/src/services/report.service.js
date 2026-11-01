@@ -23,7 +23,7 @@ export class ServiceUnavailableError extends Error {
   }
 }
 
-const DEFAULT_MAX_SNAPSHOTS = 200;
+const DEFAULT_MAX_SNAPSHOTS = 1000;
 const DEFAULT_SNAPSHOT_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 export class ReportService {
@@ -73,6 +73,45 @@ export class ReportService {
     return report;
   }
 
+  computeFilteredSortedRows(query) {
+    const baseReport = this.getSlaReport(query.from, query.to);
+
+    const filtered = [];
+    for (const row of baseReport.requests) {
+      if (query.site_id !== undefined && row.site_id !== query.site_id) {
+        continue;
+      }
+      if (query.responder_id !== undefined && row.responder_id !== query.responder_id) {
+        continue;
+      }
+      if (query.late !== undefined && row.completed_late !== query.late) {
+        continue;
+      }
+      if (query.within_target !== undefined && row.within_target !== query.within_target) {
+        continue;
+      }
+      filtered.push(row);
+    }
+
+    // Sort rows according to `query.sort` (nulls last, ties by `id` ascending)
+    filtered.sort((a, b) => compareRequestRows(a, b, query.sort));
+    return filtered;
+  }
+
+  saveSnapshot(snapshotId, fingerprint, rows, now) {
+    while (this.walkSnapshots.size >= this.maxSnapshots) {
+      const oldestKey = this.walkSnapshots.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.walkSnapshots.delete(oldestKey);
+    }
+
+    this.walkSnapshots.set(snapshotId, {
+      fp: fingerprint,
+      rows,
+      createdAt: now,
+    });
+  }
+
   browseRequests(query) {
     if (!this.store.isReady()) {
       throw new ServiceUnavailableError();
@@ -93,61 +132,53 @@ export class ReportService {
         throw new BadRequestError("Invalid or expired cursor");
       }
 
-      const snapshot = this.walkSnapshots.get(cursorPayload.sid);
-      if (!snapshot || snapshot.fp !== fingerprint) {
+      if (
+        typeof cursorPayload.ts === "number" &&
+        now - cursorPayload.ts > this.snapshotTtlMs
+      ) {
+        this.walkSnapshots.delete(cursorPayload.sid);
         throw new BadRequestError("Invalid or expired cursor");
       }
 
-      if (cursorPayload.offset <= 0 || cursorPayload.offset >= snapshot.rows.length) {
-        throw new BadRequestError("Cursor offset out of range");
+      const snapshot = this.walkSnapshots.get(cursorPayload.sid);
+      if (snapshot) {
+        if (snapshot.fp !== fingerprint) {
+          throw new BadRequestError("Invalid or expired cursor");
+        }
+        if (cursorPayload.offset <= 0 || cursorPayload.offset >= snapshot.rows.length) {
+          throw new BadRequestError("Cursor offset out of range");
+        }
+
+        // Refresh LRU position & timestamp on active walk
+        snapshot.createdAt = now;
+        this.walkSnapshots.delete(cursorPayload.sid);
+        this.walkSnapshots.set(cursorPayload.sid, snapshot);
+
+        snapshotId = cursorPayload.sid;
+        offset = cursorPayload.offset;
+        rows = snapshot.rows;
+      } else if (
+        cursorPayload.anchor &&
+        typeof cursorPayload.anchor.id === "number" &&
+        typeof cursorPayload.ts === "number"
+      ) {
+        // Fallback when snapshot was LRU-evicted by high concurrency before TTL expired:
+        // reconstruct sorted set and resume strictly after the signed keyset anchor.
+        const reconstructed = this.computeFilteredSortedRows(query);
+        const remaining = reconstructed.filter(
+          (row) => compareRequestRows(row, cursorPayload.anchor, query.sort) > 0
+        );
+        snapshotId = cursorPayload.sid;
+        offset = 0;
+        rows = remaining;
+        this.saveSnapshot(snapshotId, fingerprint, rows, now);
+      } else {
+        throw new BadRequestError("Invalid or expired cursor");
       }
-
-      // Refresh LRU position & timestamp on active walk
-      snapshot.createdAt = now;
-      this.walkSnapshots.delete(cursorPayload.sid);
-      this.walkSnapshots.set(cursorPayload.sid, snapshot);
-
-      snapshotId = cursorPayload.sid;
-      offset = cursorPayload.offset;
-      rows = snapshot.rows;
     } else {
-      const baseReport = this.getSlaReport(query.from, query.to);
-
-      const filtered = [];
-      for (const row of baseReport.requests) {
-        if (query.site_id !== undefined && row.site_id !== query.site_id) {
-          continue;
-        }
-        if (query.responder_id !== undefined && row.responder_id !== query.responder_id) {
-          continue;
-        }
-        if (query.late !== undefined && row.completed_late !== query.late) {
-          continue;
-        }
-        if (query.within_target !== undefined && row.within_target !== query.within_target) {
-          continue;
-        }
-        filtered.push(row);
-      }
-
-      // Sort rows according to `query.sort` (nulls last, ties by `id` ascending)
-      filtered.sort((a, b) => compareRequestRows(a, b, query.sort));
-
-      rows = filtered;
+      rows = this.computeFilteredSortedRows(query);
       snapshotId = crypto.randomBytes(12).toString("base64url");
-
-      // Evict oldest snapshot if capacity exceeded
-      while (this.walkSnapshots.size >= this.maxSnapshots) {
-        const oldestKey = this.walkSnapshots.keys().next().value;
-        if (oldestKey === undefined) break;
-        this.walkSnapshots.delete(oldestKey);
-      }
-
-      this.walkSnapshots.set(snapshotId, {
-        fp: fingerprint,
-        rows,
-        createdAt: now,
-      });
+      this.saveSnapshot(snapshotId, fingerprint, rows, now);
     }
 
     const pageData = rows.slice(offset, offset + query.limit);
@@ -156,10 +187,16 @@ export class ReportService {
 
     let nextCursor = null;
     if (hasMore && pageData.length > 0) {
+      const lastItem = pageData[pageData.length - 1];
       nextCursor = encodeCursor({
         fp: fingerprint,
         sid: snapshotId,
         offset: nextOffset,
+        ts: now,
+        anchor: {
+          id: lastItem.id,
+          response_business_minutes: lastItem.response_business_minutes,
+        },
       });
     }
 

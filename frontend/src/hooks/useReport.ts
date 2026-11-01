@@ -114,8 +114,7 @@ export function useReport(initialFilters: BrowseFilterState) {
           const versionChanged =
             prev &&
             meta.ready &&
-            (prev.data_version !== meta.data_version ||
-              prev.last_synced_at !== meta.last_synced_at);
+            prev.data_version !== meta.data_version;
           if (becameReady) {
             void loadFullData(filters);
           } else if (versionChanged) {

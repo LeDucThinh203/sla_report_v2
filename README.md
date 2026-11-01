@@ -34,7 +34,7 @@ sla-report-v2/
 │   │   │   └── pagination.utils.js      # HMAC-signed cursor encoder/decoder
 │   │   ├── app.js                       # Express app factory
 │   │   └── server.js                    # HTTP server & background sync starter
-│   ├── tests/                           # 22 unit, integration, sync & 12k benchmark tests (*.test.js)
+│   ├── tests/                           # 24 unit, integration, sync & 12k benchmark tests (*.test.js)
 │   └── package.json
 ├── frontend/
 │   ├── src/

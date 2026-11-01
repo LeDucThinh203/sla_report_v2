@@ -51,7 +51,11 @@ export class HelpdeskClient {
         continue;
       }
 
-      if (res.status >= 500 && res.status < 600 && attempt <= 3) {
+      if (
+        res.status >= 500 &&
+        res.status < 600 &&
+        attempt <= Math.min(this.maxRetries, 3)
+      ) {
         await this.sleep(500 * attempt);
         continue;
       }
