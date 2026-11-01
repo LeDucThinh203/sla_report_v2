@@ -62,10 +62,9 @@ export function Dashboard() {
 
       <main className="main-container">
         <FilterBar
-          filters={filters}
-          sites={metadata?.sites ?? []}
-          staff={metadata?.staff ?? []}
-          onChange={updateFilters}
+          from={filters.from}
+          to={filters.to}
+          onChange={(from, to) => updateFilters({ from, to })}
         />
 
         {error && (
@@ -96,6 +95,9 @@ export function Dashboard() {
             <RequestsTable
               rows={browseRows}
               sites={metadata?.sites ?? []}
+              staff={metadata?.staff ?? []}
+              filters={filters}
+              onFilterChange={updateFilters}
               pageIndex={pageIndex}
               pageSize={filters.limit}
               totalFilteredCount={totalFilteredCount}

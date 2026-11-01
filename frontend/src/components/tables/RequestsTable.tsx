@@ -1,10 +1,19 @@
 import { useRef } from "react";
-import type { RequestReportRow, SiteInfo } from "../../types/report.types";
+import type {
+  BrowseFilterState,
+  RequestReportRow,
+  SiteInfo,
+  SortField,
+  StaffInfo,
+} from "../../types/report.types";
 import { formatMinutes } from "../../utils/formatters";
 
 interface RequestsTableProps {
   rows: RequestReportRow[];
   sites: SiteInfo[];
+  staff: StaffInfo[];
+  filters: BrowseFilterState;
+  onFilterChange: (patch: Partial<BrowseFilterState>) => void;
   pageIndex: number;
   pageSize: number;
   totalFilteredCount: number;
@@ -19,6 +28,9 @@ interface RequestsTableProps {
 export function RequestsTable({
   rows,
   sites,
+  staff,
+  filters,
+  onFilterChange,
   pageIndex,
   pageSize,
   totalFilteredCount,
@@ -35,6 +47,15 @@ export function RequestsTable({
   const endRowNum = pageIndex * pageSize + rows.length;
   const totalPages = Math.max(1, Math.ceil(totalFilteredCount / pageSize));
 
+  const hasActiveBrowseFilters = Boolean(
+    filters.site_id ||
+      filters.responder_id ||
+      filters.within_target ||
+      filters.late ||
+      filters.sort !== "id" ||
+      filters.limit !== 50
+  );
+
   const keepFooterAnchored = async (action: () => Promise<void> | void) => {
     await action();
     requestAnimationFrame(() => {
@@ -48,12 +69,120 @@ export function RequestsTable({
         <div>
           <h2 className="panel-title">Browse Requests (/api/requests)</h2>
           <p className="panel-subtitle">
-            Cursor-paginated request evaluation rows with live filtering & sorting
+            Server-side filtered, sorted, and cursor-paginated requests
           </p>
         </div>
         <span className="badge badge-neutral" translate="no">
           Page {pageIndex + 1} / {totalPages} · {totalFilteredCount.toLocaleString()} matching
         </span>
+      </div>
+
+      {/* Dedicated Filter Bar for Browse Requests (/api/requests) */}
+      <div className="sub-filter-bar">
+        <label className="form-field">
+          <span>Site (`site_id`)</span>
+          <select
+            value={filters.site_id}
+            onChange={(e) => onFilterChange({ site_id: e.target.value })}
+          >
+            <option value="">All Sites</option>
+            {sites.map((s) => (
+              <option key={s.id} value={String(s.id)}>
+                #{s.id} — {s.name} ({s.timezone})
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="form-field">
+          <span>Responder (`responder_id`)</span>
+          <select
+            value={filters.responder_id}
+            onChange={(e) => onFilterChange({ responder_id: e.target.value })}
+          >
+            <option value="">All Responders</option>
+            {staff.map((st) => (
+              <option key={st.id} value={String(st.id)}>
+                {st.name} (#{st.id})
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="form-field">
+          <span>Within SLA Target (`within_target`)</span>
+          <select
+            value={filters.within_target}
+            onChange={(e) => onFilterChange({ within_target: e.target.value })}
+          >
+            <option value="">All</option>
+            <option value="true">Within Target (true)</option>
+            <option value="false">Missed Target (false)</option>
+          </select>
+        </label>
+
+        <label className="form-field">
+          <span>Completed Late (`late`)</span>
+          <select
+            value={filters.late}
+            onChange={(e) => onFilterChange({ late: e.target.value })}
+          >
+            <option value="">All</option>
+            <option value="true">Completed Late (true)</option>
+            <option value="false">On Time (false)</option>
+          </select>
+        </label>
+
+        <label className="form-field">
+          <span>Sort Order (`sort`)</span>
+          <select
+            value={filters.sort}
+            onChange={(e) => onFilterChange({ sort: e.target.value as SortField })}
+          >
+            <option value="id">Request ID (Ascending)</option>
+            <option value="-id">Request ID (Descending)</option>
+            <option value="response_business_minutes">
+              Response Minutes (Fastest First, Nulls Last)
+            </option>
+            <option value="-response_business_minutes">
+              Response Minutes (Slowest First, Nulls Last)
+            </option>
+          </select>
+        </label>
+
+        <label className="form-field">
+          <span>Page Size (`limit`)</span>
+          <select
+            value={String(filters.limit)}
+            onChange={(e) => onFilterChange({ limit: Number(e.target.value) })}
+          >
+            <option value="25">25 rows</option>
+            <option value="50">50 rows</option>
+            <option value="100">100 rows</option>
+            <option value="200">200 rows</option>
+          </select>
+        </label>
+
+        {hasActiveBrowseFilters && (
+          <div className="filter-reset-col">
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() =>
+                onFilterChange({
+                  site_id: "",
+                  responder_id: "",
+                  within_target: "",
+                  late: "",
+                  sort: "id",
+                  limit: 50,
+                })
+              }
+            >
+              Reset Request Filters
+            </button>
+          </div>
+        )}
       </div>
 
       {rows.length === 0 ? (

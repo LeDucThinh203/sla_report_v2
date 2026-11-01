@@ -164,6 +164,55 @@ body {
   gap: 0.875rem;
 }
 
+.date-bar-controls {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.date-inputs-row {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.form-field-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.form-field-inline input {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: #fff;
+  color: var(--text-primary);
+}
+
+.sub-filter-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+  gap: 0.85rem;
+  padding: 0.95rem 1rem;
+  margin-bottom: 1rem;
+  background: #f8fafc;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  align-items: end;
+}
+
+.filter-reset-col {
+  display: flex;
+  align-items: flex-end;
+}
+
 .form-field {
   display: flex;
   flex-direction: column;
