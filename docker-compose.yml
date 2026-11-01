@@ -3,7 +3,9 @@
 # (copy them from your invitation page). Do not commit .env.
 services:
   app:
-    build: ./app
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "8080:8080"
     environment:
