@@ -5,7 +5,10 @@ import { Header } from "../components/layout/Header";
 import { RequestsTable } from "../components/tables/RequestsTable";
 import { RespondersTable } from "../components/tables/RespondersTable";
 import { useReport } from "../hooks/useReport";
-import type { BrowseFilterState } from "../types/report.types";
+import {
+  DEFAULT_BROWSE_PAGE_SIZE,
+  type BrowseFilterState,
+} from "../types/report.types";
 
 const DEFAULT_FILTERS: BrowseFilterState = {
   from: "2026-10-01",
@@ -14,8 +17,8 @@ const DEFAULT_FILTERS: BrowseFilterState = {
   responder_id: "",
   within_target: "",
   late: "",
-  sort: "id",
-  limit: 50,
+  sort: "-id",
+  limit: DEFAULT_BROWSE_PAGE_SIZE,
 };
 
 export function Dashboard() {

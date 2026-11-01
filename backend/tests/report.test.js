@@ -365,10 +365,10 @@ describe("API Contract: /api/sla-report and /api/requests (Level 1 & Level 4)", 
     );
   });
 
-  test("continues pagination walk seamlessly via signed keyset anchor even if LRU evicts snapshot before TTL expires", () => {
+  test("deduplicates snapshots for identical (storeVersion, fingerprint) and strictly rejects evicted cursors to guarantee exactly-once", () => {
     const store = createPopulatedStore();
     const tinyCacheService = new ReportService(store, {
-      maxSnapshots: 1,
+      maxSnapshots: 2,
       snapshotTtlMs: 60000,
     });
 
@@ -382,21 +382,30 @@ describe("API Contract: /api/sla-report and /api/requests (Level 1 & Level 4)", 
     assert.deepEqual(page1A.data.map((r) => r.id), [20, 10]);
     assert.ok(page1A.next_cursor);
 
-    // Session B and Session C start, evicting Session A's in-memory snapshot from the 1-slot LRU cache
-    tinyCacheService.browseRequests({
-      from: "2026-10-01",
-      to: "2026-10-31",
-      sort: "id",
-      limit: 2,
-    });
-    tinyCacheService.browseRequests({
-      from: "2026-10-01",
-      to: "2026-10-31",
-      sort: "-id",
-      limit: 2,
+    // 50 concurrent Page-1 requests with the same filter & storeVersion reuse the same snapshot without evicting Session A
+    for (let i = 0; i < 50; i++) {
+      const p1 = tinyCacheService.browseRequests({
+        from: "2026-10-01",
+        to: "2026-10-31",
+        sort: "-response_business_minutes",
+        limit: 2,
+      });
+      assert.equal(p1.next_cursor, page1A.next_cursor);
+    }
+
+    // Mutate Request 10's response_business_minutes mid-walk
+    const baseSec = Math.floor(Date.parse("2026-10-06T01:00:00Z") / 1000);
+    store.upsertEvent(10, {
+      id: 1001,
+      status: "processing",
+      at: baseSec + 240 * 60,
+      actor_id: 301,
+      actor_name: "Alice Lim",
+      due_at: "07/10/2026 10:00",
+      reverts_id: null,
     });
 
-    // Session A requests page 2 and page 3: seamlessly recovers via keyset anchor without 400!
+    // Session A continues page 2 & page 3 with 100% strict exactly-once guarantee from its immutable snapshot
     const page2A = tinyCacheService.browseRequests({
       from: "2026-10-01",
       to: "2026-10-31",

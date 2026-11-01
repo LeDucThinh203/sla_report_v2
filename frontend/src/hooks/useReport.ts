@@ -24,8 +24,6 @@ export function useReport(initialFilters: BrowseFilterState) {
     pageIndex,
     applyFirstPage,
     applyPageResult,
-    applyRefreshedCurrentPage,
-    getCurrentCursor,
     walkToLastPage,
   } = useRequestPagination();
 
@@ -34,25 +32,21 @@ export function useReport(initialFilters: BrowseFilterState) {
   );
 
   const handleVersionChanged = useCallback(() => {
-    const currentCursor = getCurrentCursor();
+    const seq = ++requestSeqRef.current;
     void Promise.all([
       loadSlaReport(filters.from, filters.to),
-      fetchBrowseRequests(filters, currentCursor),
+      fetchBrowseRequests(filters, null),
     ])
       .then(([slaData, browseData]) => {
+        if (seq !== requestSeqRef.current) return;
         setReport(slaData);
-        applyRefreshedCurrentPage(browseData);
+        applyFirstPage(browseData);
       })
       .catch(() => {
+        if (seq !== requestSeqRef.current) return;
         void loadFullDataRef.current(filters);
       });
-  }, [
-    applyRefreshedCurrentPage,
-    filters,
-    getCurrentCursor,
-    loadSlaReport,
-    setReport,
-  ]);
+  }, [applyFirstPage, filters, loadSlaReport, setReport]);
 
   const handleBecameReady = useCallback(() => {
     void loadFullDataRef.current(filters);
@@ -175,18 +169,18 @@ export function useReport(initialFilters: BrowseFilterState) {
 
   const refresh = async () => {
     const seq = ++requestSeqRef.current;
-    const currentCursor = getCurrentCursor();
     setLoading(true);
+    setError(null);
     try {
       const [meta, slaData, browseData] = await Promise.all([
         fetchMetadata(),
         loadSlaReport(filters.from, filters.to),
-        fetchBrowseRequests(filters, currentCursor),
+        fetchBrowseRequests(filters, null),
       ]);
       if (seq !== requestSeqRef.current) return;
       updateMetadata(meta);
       setReport(slaData);
-      applyRefreshedCurrentPage(browseData);
+      applyFirstPage(browseData);
     } catch (err) {
       if (seq !== requestSeqRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to refresh");

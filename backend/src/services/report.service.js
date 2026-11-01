@@ -36,12 +36,16 @@ export class ReportService {
     this.snapshotTtlMs = options.snapshotTtlMs ?? DEFAULT_SNAPSHOT_TTL_MS;
     this.reportCache = new Map();
     this.walkSnapshots = new Map();
+    this.versionSnapshotIndex = new Map();
   }
 
   pruneExpiredSnapshots(now = Date.now()) {
     for (const [sid, snap] of this.walkSnapshots.entries()) {
       if (now - snap.createdAt > this.snapshotTtlMs) {
         this.walkSnapshots.delete(sid);
+        if (snap.versionKey && this.versionSnapshotIndex.get(snap.versionKey) === sid) {
+          this.versionSnapshotIndex.delete(snap.versionKey);
+        }
       }
     }
   }
@@ -109,113 +113,104 @@ export class ReportService {
   /**
    * Stores a pagination snapshot in the bounded LRU map, evicting the oldest entry if full.
    */
-  saveSnapshot(snapshotId, fingerprint, rows, now) {
+  saveSnapshot(snapshotId, fingerprint, versionKey, rows, now) {
     while (this.walkSnapshots.size >= this.maxSnapshots) {
       const oldestKey = this.walkSnapshots.keys().next().value;
       if (oldestKey === undefined) break;
+      const evicted = this.walkSnapshots.get(oldestKey);
       this.walkSnapshots.delete(oldestKey);
+      if (
+        evicted?.versionKey &&
+        this.versionSnapshotIndex.get(evicted.versionKey) === oldestKey
+      ) {
+        this.versionSnapshotIndex.delete(evicted.versionKey);
+      }
     }
 
     this.walkSnapshots.set(snapshotId, {
       fp: fingerprint,
+      versionKey,
       rows,
       createdAt: now,
     });
+    this.versionSnapshotIndex.set(versionKey, snapshotId);
   }
 
   /**
-   * Creates a new filtered & sorted snapshot for Page 1 of a pagination walk.
+   * Creates or reuses an immutable filtered & sorted snapshot for `(storeVersion, fingerprint)`.
+   * Deduplicating by `(storeVersion, fingerprint)` prevents repeated Page-1 requests from
+   * evicting active pagination walks while guaranteeing strict `exactly-once` semantics.
    */
   createSnapshot(fingerprint, query, now) {
+    const currentVersion = this.store.getVersion();
+    const versionKey = `${currentVersion}:${fingerprint}`;
+    const existingSid = this.versionSnapshotIndex.get(versionKey);
+
+    if (existingSid) {
+      const existingSnap = this.walkSnapshots.get(existingSid);
+      if (existingSnap && existingSnap.fp === fingerprint) {
+        existingSnap.createdAt = now;
+        this.walkSnapshots.delete(existingSid);
+        this.walkSnapshots.set(existingSid, existingSnap);
+        return { snapshotId: existingSid, offset: 0, rows: existingSnap.rows };
+      }
+      this.versionSnapshotIndex.delete(versionKey);
+    }
+
     const baseReport = this.getSlaReport(query.from, query.to);
     const filtered = this.filterRows(baseReport.requests, query);
     const rows = this.sortRows(filtered, query.sort);
     const snapshotId = crypto.randomBytes(SNAPSHOT_ID_BYTES).toString("base64url");
-    this.saveSnapshot(snapshotId, fingerprint, rows, now);
+    this.saveSnapshot(snapshotId, fingerprint, versionKey, rows, now);
     return { snapshotId, offset: 0, rows };
   }
 
   /**
-   * Validates `cursorStr` and resolves the corresponding snapshot & offset for subsequent pages.
-   * Falls back to the signed keyset anchor if the snapshot was LRU-evicted before TTL expired.
+   * Validates `cursorStr` and resolves the immutable snapshot & offset for subsequent pages.
+   * Strictly requires the snapshot to be valid and within TTL so mutated fields can never
+   * cause duplicate or skipped rows during a pagination walk.
    */
-  readSnapshotPage(cursorStr, fingerprint, query, now) {
+  readSnapshotPage(cursorStr, fingerprint, now) {
     const cursorPayload = decodeAndVerifyCursor(cursorStr, fingerprint);
     if (!cursorPayload) {
       throw new BadRequestError("Invalid or expired cursor");
     }
 
-    if (
-      typeof cursorPayload.ts === "number" &&
-      now - cursorPayload.ts > this.snapshotTtlMs
-    ) {
-      this.walkSnapshots.delete(cursorPayload.sid);
+    const snapshot = this.walkSnapshots.get(cursorPayload.sid);
+    if (!snapshot || snapshot.fp !== fingerprint) {
       throw new BadRequestError("Invalid or expired cursor");
     }
 
-    const snapshot = this.walkSnapshots.get(cursorPayload.sid);
-    if (snapshot) {
-      if (snapshot.fp !== fingerprint) {
-        throw new BadRequestError("Invalid or expired cursor");
-      }
-      if (cursorPayload.offset <= 0 || cursorPayload.offset >= snapshot.rows.length) {
-        throw new BadRequestError("Cursor offset out of range");
-      }
-
-      // Refresh LRU position & timestamp on active walk
-      snapshot.createdAt = now;
-      this.walkSnapshots.delete(cursorPayload.sid);
-      this.walkSnapshots.set(cursorPayload.sid, snapshot);
-
-      return {
-        snapshotId: cursorPayload.sid,
-        offset: cursorPayload.offset,
-        rows: snapshot.rows,
-      };
+    if (cursorPayload.offset <= 0 || cursorPayload.offset >= snapshot.rows.length) {
+      throw new BadRequestError("Cursor offset out of range");
     }
 
-    if (
-      cursorPayload.anchor &&
-      typeof cursorPayload.anchor.id === "number" &&
-      typeof cursorPayload.ts === "number"
-    ) {
-      const baseReport = this.getSlaReport(query.from, query.to);
-      const filtered = this.filterRows(baseReport.requests, query);
-      const sorted = this.sortRows(filtered, query.sort);
-      const remaining = sorted.filter(
-        (row) => compareRequestRows(row, cursorPayload.anchor, query.sort) > 0
-      );
-      this.saveSnapshot(cursorPayload.sid, fingerprint, remaining, now);
-      return {
-        snapshotId: cursorPayload.sid,
-        offset: 0,
-        rows: remaining,
-      };
-    }
+    // Refresh LRU position & timestamp on active walk
+    snapshot.createdAt = now;
+    this.walkSnapshots.delete(cursorPayload.sid);
+    this.walkSnapshots.set(cursorPayload.sid, snapshot);
 
-    throw new BadRequestError("Invalid or expired cursor");
+    return {
+      snapshotId: cursorPayload.sid,
+      offset: cursorPayload.offset,
+      rows: snapshot.rows,
+    };
   }
 
   /**
    * Slices a page of rows and encodes `next_cursor` if more rows remain.
    */
-  buildPaginatedResult(rows, offset, limit, fingerprint, snapshotId, now) {
+  buildPaginatedResult(rows, offset, limit, fingerprint, snapshotId) {
     const pageData = rows.slice(offset, offset + limit);
     const nextOffset = offset + pageData.length;
     const hasMore = nextOffset < rows.length;
 
     let nextCursor = null;
     if (hasMore && pageData.length > 0) {
-      const lastItem = pageData[pageData.length - 1];
       nextCursor = encodeCursor({
         fp: fingerprint,
         sid: snapshotId,
         offset: nextOffset,
-        ts: now,
-        anchor: {
-          id: lastItem.id,
-          response_business_minutes: lastItem.response_business_minutes,
-        },
       });
     }
 
@@ -236,7 +231,7 @@ export class ReportService {
     const fingerprint = buildFilterFingerprint(query);
     const { snapshotId, offset, rows } =
       query.cursor !== undefined
-        ? this.readSnapshotPage(query.cursor, fingerprint, query, now)
+        ? this.readSnapshotPage(query.cursor, fingerprint, now)
         : this.createSnapshot(fingerprint, query, now);
 
     return this.buildPaginatedResult(
@@ -244,8 +239,7 @@ export class ReportService {
       offset,
       query.limit,
       fingerprint,
-      snapshotId,
-      now
+      snapshotId
     );
   }
 }
