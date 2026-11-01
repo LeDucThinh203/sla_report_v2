@@ -1,0 +1,23 @@
+{
+  "name": "helpdesk-sla-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/src/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/src/server.js",
+    "test": "npm run build && node --test dist/tests/*.test.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "express": "5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}

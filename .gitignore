@@ -4,3 +4,7 @@ __pycache__/
 tmp/
 log/*.log
 .env
+dist/
+build/
+*.tsbuildinfo
+
