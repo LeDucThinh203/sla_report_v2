@@ -354,6 +354,22 @@ body {
   gap: 0.65rem;
 }
 
+.table-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.footer-info {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
 .page-indicator {
   font-size: 0.825rem;
   font-weight: 600;

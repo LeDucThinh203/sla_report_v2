@@ -76,6 +76,7 @@ export function Dashboard() {
               rows={browseRows}
               sites={metadata?.sites ?? []}
               pageIndex={pageIndex}
+              pageSize={filters.limit}
               hasNextPage={Boolean(nextCursor)}
               onPrevPage={() => void goToPrevPage()}
               onNextPage={() => void goToNextPage()}

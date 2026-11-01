@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchBrowseRequests,
   fetchMetadata,
@@ -22,8 +22,16 @@ export function useReport(initialFilters: BrowseFilterState) {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
+  const cursorHistoryRef = useRef<(string | null)[]>([null]);
+  const pageIndexRef = useRef<number>(0);
+
   const loadData = useCallback(
-    async (activeFilters: BrowseFilterState, cursor: string | null = null, resetPaging = true) => {
+    async (
+      activeFilters: BrowseFilterState,
+      cursor: string | null = null,
+      targetPageIndex = 0,
+      newHistory?: (string | null)[]
+    ) => {
       setLoading(true);
       setError(null);
       try {
@@ -43,10 +51,12 @@ export function useReport(initialFilters: BrowseFilterState) {
         setReport(slaData);
         setBrowseRows(browseData.data);
         setNextCursor(browseData.next_cursor);
+        setPageIndex(targetPageIndex);
+        pageIndexRef.current = targetPageIndex;
 
-        if (resetPaging) {
-          setCursorHistory([null]);
-          setPageIndex(0);
+        if (newHistory) {
+          setCursorHistory(newHistory);
+          cursorHistoryRef.current = newHistory;
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load report data");
@@ -57,11 +67,14 @@ export function useReport(initialFilters: BrowseFilterState) {
     []
   );
 
+  // Reload from Page 1 (index 0) whenever filters change
   useEffect(() => {
-    void loadData(filters, null, true);
+    const initialHistory: (string | null)[] = [null];
+    void loadData(filters, null, 0, initialHistory);
   }, [filters, loadData]);
 
   // Poll metadata every 10s so warming-up state or live updates reflect automatically
+  // without resetting the user's current page!
   useEffect(() => {
     const timer = setInterval(async () => {
       try {
@@ -73,7 +86,9 @@ export function useReport(initialFilters: BrowseFilterState) {
             meta.ready &&
             prev.total_requests_cached !== meta.total_requests_cached;
           if (becameReady || syncedChanged) {
-            void loadData(filters, cursorHistory[pageIndex] ?? null, false);
+            const currentIdx = pageIndexRef.current;
+            const currentCursor = cursorHistoryRef.current[currentIdx] ?? null;
+            void loadData(filters, currentCursor, currentIdx);
           }
           return meta;
         });
@@ -82,23 +97,20 @@ export function useReport(initialFilters: BrowseFilterState) {
       }
     }, 10000);
     return () => clearInterval(timer);
-  }, [filters, cursorHistory, pageIndex, loadData]);
+  }, [filters, loadData]);
 
   const goToNextPage = async () => {
-    if (!nextCursor) return;
+    if (!nextCursor || loading) return;
     const nextIdx = pageIndex + 1;
     const updatedHistory = [...cursorHistory.slice(0, nextIdx), nextCursor];
-    setCursorHistory(updatedHistory);
-    setPageIndex(nextIdx);
-    await loadData(filters, nextCursor, false);
+    await loadData(filters, nextCursor, nextIdx, updatedHistory);
   };
 
   const goToPrevPage = async () => {
-    if (pageIndex <= 0) return;
+    if (pageIndex <= 0 || loading) return;
     const prevIdx = pageIndex - 1;
     const prevCursor = cursorHistory[prevIdx] ?? null;
-    setPageIndex(prevIdx);
-    await loadData(filters, prevCursor, false);
+    await loadData(filters, prevCursor, prevIdx);
   };
 
   const updateFilters = (patch: Partial<BrowseFilterState>) => {
@@ -106,7 +118,9 @@ export function useReport(initialFilters: BrowseFilterState) {
   };
 
   const refresh = () => {
-    void loadData(filters, cursorHistory[pageIndex] ?? null, false);
+    const currentIdx = pageIndexRef.current;
+    const currentCursor = cursorHistoryRef.current[currentIdx] ?? null;
+    void loadData(filters, currentCursor, currentIdx);
   };
 
   return {
@@ -124,4 +138,3 @@ export function useReport(initialFilters: BrowseFilterState) {
     refresh,
   };
 }
-
