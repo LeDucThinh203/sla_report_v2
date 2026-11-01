@@ -7,3 +7,4 @@ export function createHealthRouter(controller: HealthController): Router {
   router.get("/ready", controller.getReady);
   return router;
 }
+

@@ -41,3 +41,4 @@ export function Header({ metadata, onRefresh, loading }: HeaderProps) {
     </header>
   );
 }
+

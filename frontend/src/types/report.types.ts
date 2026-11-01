@@ -63,3 +63,4 @@ export interface BrowseFilterState {
   sort: SortField;
   limit: number;
 }
+

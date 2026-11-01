@@ -23,3 +23,4 @@ export function formatTimestamp(iso: string | null): string {
     return iso;
   }
 }
+

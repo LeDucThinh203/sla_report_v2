@@ -124,3 +124,4 @@ export function useReport(initialFilters: BrowseFilterState) {
     refresh,
   };
 }
+

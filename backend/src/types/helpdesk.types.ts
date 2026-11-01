@@ -101,3 +101,4 @@ export interface HelpdeskPagedEventsResponse {
   per_page: number;
   has_more: boolean;
 }
+

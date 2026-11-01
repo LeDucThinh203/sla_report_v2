@@ -9,3 +9,4 @@ RUN chmod +x entrypoint.sh
 EXPOSE 8080
 ENTRYPOINT ["sh", "./entrypoint.sh"]
 CMD ["start"]
+

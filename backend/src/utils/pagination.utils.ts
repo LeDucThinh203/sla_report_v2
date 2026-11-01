@@ -129,3 +129,4 @@ export function isRowAfterCursor(
   };
   return compareRequestRows(row, anchor, sort) > 0;
 }
+

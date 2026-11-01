@@ -5,3 +5,4 @@ case "$1" in
   test)  exec node --test dist/tests/*.test.js ;;
   *)     exec "$@" ;;
 esac
+

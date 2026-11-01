@@ -158,3 +158,4 @@ export class StoreRepository {
     return this.eventsByRequest;
   }
 }
+

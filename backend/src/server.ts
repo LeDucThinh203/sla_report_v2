@@ -24,3 +24,4 @@ app.listen(config.port, "0.0.0.0", () => {
     console.error("Failed to start background sync:", err);
   });
 });
+

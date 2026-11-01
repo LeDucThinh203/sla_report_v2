@@ -8,3 +8,4 @@ export function createReportRouter(controller: ReportController): Router {
   router.get("/api/metadata", controller.getMetadata);
   return router;
 }
+

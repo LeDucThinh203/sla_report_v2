@@ -52,3 +52,4 @@ export async function fetchBrowseRequests(
   const res = await fetch(`/api/requests?${params.toString()}`);
   return handleResponse<BrowseRequestsResponse>(res);
 }
+

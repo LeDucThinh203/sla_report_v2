@@ -73,3 +73,4 @@ export function SummaryCards({ requests }: SummaryCardsProps) {
     </section>
   );
 }
+

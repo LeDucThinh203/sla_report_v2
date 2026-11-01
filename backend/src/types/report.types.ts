@@ -45,3 +45,4 @@ export interface BrowseRequestsResponse {
   data: RequestReportRow[];
   next_cursor: string | null;
 }
+

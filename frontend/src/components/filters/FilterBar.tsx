@@ -153,3 +153,4 @@ export function FilterBar({ filters, sites, staff, onChange }: FilterBarProps) {
     </section>
   );
 }
+

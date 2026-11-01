@@ -38,3 +38,4 @@ test("GET /ready returns 503 before sync completes and 200 once ready", async ()
     server.close();
   }
 });
+
