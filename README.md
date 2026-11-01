@@ -39,7 +39,11 @@ sla-report-v2/
 ├── frontend/
 │   ├── src/
 │   │   ├── components/                  # Header, SummaryCards, FilterBar, RespondersTable, RequestsTable
-│   │   ├── hooks/useReport.ts           # Race-safe data fetching & version-aware live polling hook
+│   │   ├── hooks/
+│   │   │   ├── useSlaReport.ts          # Aggregate SLA report state & fetching
+│   │   │   ├── useRequestPagination.ts  # Cursor pagination & history management
+│   │   │   ├── useLiveSync.ts           # Pure metadata polling & version-change detection
+│   │   │   └── useReport.ts             # Composed dashboard controller hook
 │   │   ├── pages/Dashboard.tsx          # Main dashboard view
 │   │   ├── services/report.api.ts       # Frontend API client
 │   │   ├── styles/global.css            # Clean SaaS dashboard styling

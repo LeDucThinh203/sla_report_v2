@@ -1,3 +1,13 @@
+import {
+  CHANGE_FEED_PAGE_SIZE,
+  DEFAULT_CLIENT_MAX_RETRIES,
+  DEFAULT_RATE_LIMIT_BASE_DELAY_MS,
+  DEFAULT_RATE_LIMIT_MAX_DELAY_MS,
+  DEFAULT_SERVER_ERROR_BACKOFF_MS,
+  DEFAULT_SERVER_ERROR_MAX_RETRIES,
+  RETRY_AFTER_PADDING_MS,
+} from "../types/helpdesk.types.js";
+
 export class HelpdeskApiError extends Error {
   constructor(message, status, body) {
     super(message);
@@ -11,7 +21,7 @@ export class HelpdeskClient {
   constructor({
     baseUrl = process.env.HELPDESK_URL || "http://localhost:4010",
     token = process.env.HELPDESK_TOKEN || "",
-    maxRetries = 5,
+    maxRetries = DEFAULT_CLIENT_MAX_RETRIES,
   } = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.token = token;
@@ -45,8 +55,11 @@ export class HelpdeskClient {
         const retryAfterSec = retryAfterHeader ? Number(retryAfterHeader) : NaN;
         const waitMs =
           !Number.isNaN(retryAfterSec) && retryAfterSec > 0
-            ? retryAfterSec * 1000 + 100
-            : Math.min(1000 * Math.pow(2, attempt - 1), 10000);
+            ? retryAfterSec * 1000 + RETRY_AFTER_PADDING_MS
+            : Math.min(
+                DEFAULT_RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt - 1),
+                DEFAULT_RATE_LIMIT_MAX_DELAY_MS
+              );
         await this.sleep(waitMs);
         continue;
       }
@@ -54,9 +67,9 @@ export class HelpdeskClient {
       if (
         res.status >= 500 &&
         res.status < 600 &&
-        attempt <= Math.min(this.maxRetries, 3)
+        attempt <= Math.min(this.maxRetries, DEFAULT_SERVER_ERROR_MAX_RETRIES)
       ) {
-        await this.sleep(500 * attempt);
+        await this.sleep(DEFAULT_SERVER_ERROR_BACKOFF_MS * attempt);
         continue;
       }
 
@@ -93,7 +106,7 @@ export class HelpdeskClient {
     return res.data;
   }
 
-  async getChanges(cursor = null, limit = 500) {
+  async getChanges(cursor = null, limit = CHANGE_FEED_PAGE_SIZE) {
     return this.get("/v1/changes", {
       cursor: cursor ?? undefined,
       limit,
@@ -113,4 +126,3 @@ export class HelpdeskClient {
     return this.get(`/v1/requests/${requestId}/events`, { page });
   }
 }
-

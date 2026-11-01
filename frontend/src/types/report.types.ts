@@ -1,3 +1,7 @@
+export const LIVE_SYNC_POLL_INTERVAL_MS = 10_000;
+export const MAX_LAST_PAGE_HOPS = 500;
+export const DEFAULT_BROWSE_PAGE_SIZE = 50;
+
 export interface RequestReportRow {
   id: number;
   site_id: number;
@@ -64,4 +68,3 @@ export interface BrowseFilterState {
   sort: SortField;
   limit: number;
 }
-

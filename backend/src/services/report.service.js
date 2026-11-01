@@ -1,5 +1,11 @@
 import crypto from "node:crypto";
 import {
+  DEFAULT_MAX_SNAPSHOTS,
+  DEFAULT_SNAPSHOT_TTL_MS,
+  MAX_REPORT_CACHE_ENTRIES,
+  SNAPSHOT_ID_BYTES,
+} from "../types/report.types.js";
+import {
   buildFilterFingerprint,
   compareRequestRows,
   decodeAndVerifyCursor,
@@ -22,9 +28,6 @@ export class ServiceUnavailableError extends Error {
     this.status = 503;
   }
 }
-
-const DEFAULT_MAX_SNAPSHOTS = 1000;
-const DEFAULT_SNAPSHOT_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 export class ReportService {
   constructor(store, options = {}) {
@@ -65,7 +68,7 @@ export class ReportService {
       this.store.getStaffMap()
     );
 
-    if (this.reportCache.size > 50) {
+    if (this.reportCache.size > MAX_REPORT_CACHE_ENTRIES) {
       this.reportCache.clear();
     }
     this.reportCache.set(cacheKey, { version: currentVersion, report });
@@ -73,11 +76,12 @@ export class ReportService {
     return report;
   }
 
-  computeFilteredSortedRows(query) {
-    const baseReport = this.getSlaReport(query.from, query.to);
-
+  /**
+   * Filters request rows by `site_id`, `responder_id`, `late`, and `within_target`.
+   */
+  filterRows(rows, query) {
     const filtered = [];
-    for (const row of baseReport.requests) {
+    for (const row of rows) {
       if (query.site_id !== undefined && row.site_id !== query.site_id) {
         continue;
       }
@@ -92,12 +96,19 @@ export class ReportService {
       }
       filtered.push(row);
     }
-
-    // Sort rows according to `query.sort` (nulls last, ties by `id` ascending)
-    filtered.sort((a, b) => compareRequestRows(a, b, query.sort));
     return filtered;
   }
 
+  /**
+   * Sorts a copy of `rows` according to `sort` (nulls last, ties broken by `id` ascending).
+   */
+  sortRows(rows, sort) {
+    return [...rows].sort((a, b) => compareRequestRows(a, b, sort));
+  }
+
+  /**
+   * Stores a pagination snapshot in the bounded LRU map, evicting the oldest entry if full.
+   */
   saveSnapshot(snapshotId, fingerprint, rows, now) {
     while (this.walkSnapshots.size >= this.maxSnapshots) {
       const oldestKey = this.walkSnapshots.keys().next().value;
@@ -112,76 +123,84 @@ export class ReportService {
     });
   }
 
-  browseRequests(query) {
-    if (!this.store.isReady()) {
-      throw new ServiceUnavailableError();
+  /**
+   * Creates a new filtered & sorted snapshot for Page 1 of a pagination walk.
+   */
+  createSnapshot(fingerprint, query, now) {
+    const baseReport = this.getSlaReport(query.from, query.to);
+    const filtered = this.filterRows(baseReport.requests, query);
+    const rows = this.sortRows(filtered, query.sort);
+    const snapshotId = crypto.randomBytes(SNAPSHOT_ID_BYTES).toString("base64url");
+    this.saveSnapshot(snapshotId, fingerprint, rows, now);
+    return { snapshotId, offset: 0, rows };
+  }
+
+  /**
+   * Validates `cursorStr` and resolves the corresponding snapshot & offset for subsequent pages.
+   * Falls back to the signed keyset anchor if the snapshot was LRU-evicted before TTL expired.
+   */
+  readSnapshotPage(cursorStr, fingerprint, query, now) {
+    const cursorPayload = decodeAndVerifyCursor(cursorStr, fingerprint);
+    if (!cursorPayload) {
+      throw new BadRequestError("Invalid or expired cursor");
     }
 
-    const now = Date.now();
-    this.pruneExpiredSnapshots(now);
-
-    const fingerprint = buildFilterFingerprint(query);
-
-    let snapshotId;
-    let offset = 0;
-    let rows;
-
-    if (query.cursor !== undefined) {
-      const cursorPayload = decodeAndVerifyCursor(query.cursor, fingerprint);
-      if (!cursorPayload) {
-        throw new BadRequestError("Invalid or expired cursor");
-      }
-
-      if (
-        typeof cursorPayload.ts === "number" &&
-        now - cursorPayload.ts > this.snapshotTtlMs
-      ) {
-        this.walkSnapshots.delete(cursorPayload.sid);
-        throw new BadRequestError("Invalid or expired cursor");
-      }
-
-      const snapshot = this.walkSnapshots.get(cursorPayload.sid);
-      if (snapshot) {
-        if (snapshot.fp !== fingerprint) {
-          throw new BadRequestError("Invalid or expired cursor");
-        }
-        if (cursorPayload.offset <= 0 || cursorPayload.offset >= snapshot.rows.length) {
-          throw new BadRequestError("Cursor offset out of range");
-        }
-
-        // Refresh LRU position & timestamp on active walk
-        snapshot.createdAt = now;
-        this.walkSnapshots.delete(cursorPayload.sid);
-        this.walkSnapshots.set(cursorPayload.sid, snapshot);
-
-        snapshotId = cursorPayload.sid;
-        offset = cursorPayload.offset;
-        rows = snapshot.rows;
-      } else if (
-        cursorPayload.anchor &&
-        typeof cursorPayload.anchor.id === "number" &&
-        typeof cursorPayload.ts === "number"
-      ) {
-        // Fallback when snapshot was LRU-evicted by high concurrency before TTL expired:
-        // reconstruct sorted set and resume strictly after the signed keyset anchor.
-        const reconstructed = this.computeFilteredSortedRows(query);
-        const remaining = reconstructed.filter(
-          (row) => compareRequestRows(row, cursorPayload.anchor, query.sort) > 0
-        );
-        snapshotId = cursorPayload.sid;
-        offset = 0;
-        rows = remaining;
-        this.saveSnapshot(snapshotId, fingerprint, rows, now);
-      } else {
-        throw new BadRequestError("Invalid or expired cursor");
-      }
-    } else {
-      rows = this.computeFilteredSortedRows(query);
-      snapshotId = crypto.randomBytes(12).toString("base64url");
-      this.saveSnapshot(snapshotId, fingerprint, rows, now);
+    if (
+      typeof cursorPayload.ts === "number" &&
+      now - cursorPayload.ts > this.snapshotTtlMs
+    ) {
+      this.walkSnapshots.delete(cursorPayload.sid);
+      throw new BadRequestError("Invalid or expired cursor");
     }
 
-    const pageData = rows.slice(offset, offset + query.limit);
+    const snapshot = this.walkSnapshots.get(cursorPayload.sid);
+    if (snapshot) {
+      if (snapshot.fp !== fingerprint) {
+        throw new BadRequestError("Invalid or expired cursor");
+      }
+      if (cursorPayload.offset <= 0 || cursorPayload.offset >= snapshot.rows.length) {
+        throw new BadRequestError("Cursor offset out of range");
+      }
+
+      // Refresh LRU position & timestamp on active walk
+      snapshot.createdAt = now;
+      this.walkSnapshots.delete(cursorPayload.sid);
+      this.walkSnapshots.set(cursorPayload.sid, snapshot);
+
+      return {
+        snapshotId: cursorPayload.sid,
+        offset: cursorPayload.offset,
+        rows: snapshot.rows,
+      };
+    }
+
+    if (
+      cursorPayload.anchor &&
+      typeof cursorPayload.anchor.id === "number" &&
+      typeof cursorPayload.ts === "number"
+    ) {
+      const baseReport = this.getSlaReport(query.from, query.to);
+      const filtered = this.filterRows(baseReport.requests, query);
+      const sorted = this.sortRows(filtered, query.sort);
+      const remaining = sorted.filter(
+        (row) => compareRequestRows(row, cursorPayload.anchor, query.sort) > 0
+      );
+      this.saveSnapshot(cursorPayload.sid, fingerprint, remaining, now);
+      return {
+        snapshotId: cursorPayload.sid,
+        offset: 0,
+        rows: remaining,
+      };
+    }
+
+    throw new BadRequestError("Invalid or expired cursor");
+  }
+
+  /**
+   * Slices a page of rows and encodes `next_cursor` if more rows remain.
+   */
+  buildPaginatedResult(rows, offset, limit, fingerprint, snapshotId, now) {
+    const pageData = rows.slice(offset, offset + limit);
     const nextOffset = offset + pageData.length;
     const hasMore = nextOffset < rows.length;
 
@@ -204,5 +223,29 @@ export class ReportService {
       data: pageData,
       next_cursor: nextCursor,
     };
+  }
+
+  browseRequests(query) {
+    if (!this.store.isReady()) {
+      throw new ServiceUnavailableError();
+    }
+
+    const now = Date.now();
+    this.pruneExpiredSnapshots(now);
+
+    const fingerprint = buildFilterFingerprint(query);
+    const { snapshotId, offset, rows } =
+      query.cursor !== undefined
+        ? this.readSnapshotPage(query.cursor, fingerprint, query, now)
+        : this.createSnapshot(fingerprint, query, now);
+
+    return this.buildPaginatedResult(
+      rows,
+      offset,
+      query.limit,
+      fingerprint,
+      snapshotId,
+      now
+    );
   }
 }

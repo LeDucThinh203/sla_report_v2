@@ -1,12 +1,13 @@
 import { isValidIsoDateString } from "../utils/timezone.utils.js";
 import { BadRequestError } from "../services/report.service.js";
+import {
+  DEFAULT_PAGE_LIMIT,
+  MAX_PAGE_LIMIT,
+  MIN_PAGE_LIMIT,
+  VALID_SORT_FIELDS,
+} from "../types/report.types.js";
 
-const VALID_SORTS = new Set([
-  "id",
-  "-id",
-  "response_business_minutes",
-  "-response_business_minutes",
-]);
+const VALID_SORTS = new Set(VALID_SORT_FIELDS);
 
 function parseStrictPositiveInt(value, paramName) {
   if (typeof value !== "string" || !/^\d+$/.test(value)) {
@@ -67,11 +68,13 @@ export function validateBrowseRequestsParams(query) {
     sort = query.sort;
   }
 
-  let limit = 50;
+  let limit = DEFAULT_PAGE_LIMIT;
   if (query.limit !== undefined) {
     limit = parseStrictPositiveInt(query.limit, "limit");
-    if (limit < 1 || limit > 200) {
-      throw new BadRequestError("limit must be between 1 and 200");
+    if (limit < MIN_PAGE_LIMIT || limit > MAX_PAGE_LIMIT) {
+      throw new BadRequestError(
+        `limit must be between ${MIN_PAGE_LIMIT} and ${MAX_PAGE_LIMIT}`
+      );
     }
   }
 
@@ -95,4 +98,3 @@ export function validateBrowseRequestsParams(query) {
     cursor,
   };
 }
-

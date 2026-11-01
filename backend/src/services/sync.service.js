@@ -1,13 +1,21 @@
 import { StoreRepository } from "../repositories/store.repository.js";
+import {
+  CHANGE_FEED_PAGE_SIZE,
+  DEFAULT_INITIAL_RETRY_DELAY_MS,
+  DEFAULT_MAX_INITIAL_RETRY_DELAY_MS,
+  DEFAULT_SYNC_POLL_INTERVAL_MS,
+} from "../types/helpdesk.types.js";
 import { HelpdeskApiError } from "./helpdesk.service.js";
 
 export class SyncService {
   constructor(client, store, options = {}) {
     this.client = client;
     this.store = store;
-    this.pollIntervalMs = options.pollIntervalMs ?? 5000;
-    this.initialRetryDelayMs = options.initialRetryDelayMs ?? 1000;
-    this.maxInitialRetryDelayMs = options.maxInitialRetryDelayMs ?? 10000;
+    this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_SYNC_POLL_INTERVAL_MS;
+    this.initialRetryDelayMs =
+      options.initialRetryDelayMs ?? DEFAULT_INITIAL_RETRY_DELAY_MS;
+    this.maxInitialRetryDelayMs =
+      options.maxInitialRetryDelayMs ?? DEFAULT_MAX_INITIAL_RETRY_DELAY_MS;
     this.pollTimer = null;
     this.syncing = false;
     this.stopped = false;
@@ -70,27 +78,82 @@ export class SyncService {
     }
   }
 
-  async populateMetadataIntoStore(workStore) {
+  /**
+   * Step 1: Loads sites, staff, and per-site holidays into `store` if not yet populated.
+   */
+  async loadReferenceData(store) {
+    if (store.getSitesMap().size > 0) return;
+
     const [sites, staff] = await Promise.all([
       this.client.getSites(),
       this.client.getStaff(),
     ]);
 
-    workStore.setSites(sites);
-    workStore.setStaffList(staff);
+    store.setSites(sites);
+    store.setStaffList(staff);
 
     await Promise.all(
       sites.map(async (site) => {
         const holidays = await this.client.getSiteHolidays(site.id);
-        workStore.setHolidaysForSite(site.id, holidays);
+        store.setHolidaysForSite(site.id, holidays);
       })
     );
   }
 
   /**
-   * Performs a complete sync of sites, holidays, staff, and the change feed into `targetStore`.
-   * Stages all data in a temporary buffer if `targetStore` is not yet ready so that `targetStore`
-   * transitions to ready atomically only after the entire initial change feed has been drained.
+   * Step 2: Resets `store` to a clean state with fresh reference data when a cursor expires (410 Gone).
+   */
+  async recoverExpiredCursor(store) {
+    const cleanStore = new StoreRepository();
+    await this.loadReferenceData(cleanStore);
+    store.replaceFrom(cleanStore);
+  }
+
+  /**
+   * Step 3: Drains all pages of `/v1/changes` into `store`, handling mid-stream 410 cursor expiry.
+   */
+  async drainChangeFeed(store) {
+    let cursor = store.getLatestCursor();
+    let hasMore = true;
+
+    while (hasMore && !this.stopped) {
+      try {
+        const page = await this.client.getChanges(cursor, CHANGE_FEED_PAGE_SIZE);
+        store.applyChanges(page.data);
+        if (page.next_cursor) {
+          cursor = page.next_cursor;
+          store.setLatestCursor(cursor);
+        }
+        hasMore = Boolean(page.has_more && page.next_cursor);
+      } catch (err) {
+        if (err instanceof HelpdeskApiError && err.status === 410) {
+          await this.recoverExpiredCursor(store);
+          cursor = null;
+          hasMore = true;
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
+  /**
+   * Step 4: Marks `workStore` ready and atomically commits it into `targetStore`.
+   */
+  commitSyncedStore(workStore, targetStore) {
+    if (this.stopped) return;
+    workStore.setLastSyncedAt(new Date().toISOString());
+    workStore.setReady(true);
+    if (workStore !== targetStore) {
+      targetStore.replaceFrom(workStore);
+      if (workStore === this.stagingStore) {
+        this.stagingStore = null;
+      }
+    }
+  }
+
+  /**
+   * Performs a complete sync of reference data and the change feed into `targetStore`.
    */
   async runFullSyncIntoStore(targetStore) {
     if (this.syncing) return;
@@ -101,55 +164,32 @@ export class SyncService {
           ? (this.stagingStore ?? (this.stagingStore = new StoreRepository()))
           : targetStore;
 
-      if (workStore.getSitesMap().size === 0) {
-        await this.populateMetadataIntoStore(workStore);
-      }
-
-      let cursor = workStore.getLatestCursor();
-      let hasMore = true;
-
-      while (hasMore && !this.stopped) {
-        try {
-          const page = await this.client.getChanges(cursor, 500);
-          workStore.applyChanges(page.data);
-          if (page.next_cursor) {
-            cursor = page.next_cursor;
-            workStore.setLatestCursor(cursor);
-          }
-          hasMore = Boolean(page.has_more && page.next_cursor);
-        } catch (err) {
-          if (err instanceof HelpdeskApiError && err.status === 410) {
-            // Cursor expired during bootstrap/rebuild: reset workStore cleanly, re-fetch metadata, and restart feed
-            const cleanStore = new StoreRepository();
-            await this.populateMetadataIntoStore(cleanStore);
-            workStore.replaceFrom(cleanStore);
-            cursor = null;
-            hasMore = true;
-            continue;
-          }
-          throw err;
-        }
-      }
-
-      if (!this.stopped) {
-        workStore.setLastSyncedAt(new Date().toISOString());
-        workStore.setReady(true);
-        if (workStore !== targetStore) {
-          targetStore.replaceFrom(workStore);
-          this.stagingStore = null;
-        }
-      }
+      await this.loadReferenceData(workStore);
+      await this.drainChangeFeed(workStore);
+      this.commitSyncedStore(workStore, targetStore);
     } finally {
       this.syncing = false;
     }
   }
 
   /**
+   * Resumes or initiates a background store rebuild after an incremental 410 cursor expiry,
+   * then swaps atomically into `this.store` once complete.
+   */
+  async resumeOrStartRebuildStore() {
+    if (!this.rebuildStore) {
+      this.rebuildStore = new StoreRepository();
+    }
+    await this.runFullSyncIntoStore(this.rebuildStore);
+    if (this.rebuildStore.isReady() && !this.stopped) {
+      this.store.replaceFrom(this.rebuildStore);
+      this.rebuildStore = null;
+    }
+  }
+
+  /**
    * Polls `/v1/changes` from the latest cursor to pick up incremental updates within 60s.
-   * Buffers all pages of an incremental batch and applies them in a single atomic commit
-   * so concurrent report readers never observe half-applied multi-page updates.
-   * Handles 410 Gone (expired cursor) by rebuilding a staging store (persisted across retries
-   * if transient errors occur during the rebuild) and swapping atomically once complete.
+   * Buffers all pages of an incremental batch and applies them in a single atomic commit.
    */
   async syncIncremental() {
     if (this.syncing || this.stopped) return;
@@ -159,14 +199,8 @@ export class SyncService {
       return;
     }
 
-    // If a previous 410 triggered a background rebuild that was interrupted by a transient error,
-    // resume draining into `this.rebuildStore` and swap atomically once complete.
     if (this.rebuildStore) {
-      await this.runFullSyncIntoStore(this.rebuildStore);
-      if (this.rebuildStore.isReady() && !this.stopped) {
-        this.store.replaceFrom(this.rebuildStore);
-        this.rebuildStore = null;
-      }
+      await this.resumeOrStartRebuildStore();
       return;
     }
 
@@ -177,7 +211,7 @@ export class SyncService {
       const bufferedChanges = [];
 
       while (hasMore && !this.stopped) {
-        const page = await this.client.getChanges(cursor, 500);
+        const page = await this.client.getChanges(cursor, CHANGE_FEED_PAGE_SIZE);
         if (page.data.length > 0) {
           bufferedChanges.push(...page.data);
         }
@@ -198,14 +232,8 @@ export class SyncService {
       }
     } catch (err) {
       if (err instanceof HelpdeskApiError && err.status === 410) {
-        // Cursor expired after 15 minutes: rebuild into `this.rebuildStore` and swap atomically
         this.syncing = false;
-        this.rebuildStore = new StoreRepository();
-        await this.runFullSyncIntoStore(this.rebuildStore);
-        if (this.rebuildStore.isReady() && !this.stopped) {
-          this.store.replaceFrom(this.rebuildStore);
-          this.rebuildStore = null;
-        }
+        await this.resumeOrStartRebuildStore();
         return;
       }
       throw err;
