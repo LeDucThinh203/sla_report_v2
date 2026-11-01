@@ -54,3 +54,4 @@ export function serializeRequestsToCsv(rows) {
   }
   return `${lines.join("\n")}\n`;
 }
+

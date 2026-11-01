@@ -36,9 +36,33 @@
   - Audited `docs/rules.md`, `docs/contract.md`, and live Practice API edge cases (`#63467`, `#64116`, Sydney DST, Jakarta Saturday hours).
   - Structured the application with a pure ES Module JavaScript backend (`backend/src/`) and a React + TypeScript + Vite frontend (`frontend/src/`) bundled via a multi-stage `Dockerfile`.
   - Built comprehensive unit, integration, resilience, and 12,000-request benchmark tests in `backend/tests/`.
+  - Implemented the additional Level 4 `GET /api/requests.csv` export endpoint (`backend/src/utils/csv.utils.js`, `ReportService.exportRequestsCsv`, `validateExportRequestsCsvParams`) and the frontend **Download CSV** button (`RequestsTable.tsx`, `buildRequestsCsvUrl`), along with automated CSV contract and escaping tests.
 - **What came back wrong & what I changed**:
   - Initially, incremental change-feed polling applied each page to the store inside the pagination loop, which could expose partial multi-page updates to a concurrent report reader. I refactored `SyncService.syncIncremental()` to buffer all pages in a poll cycle and apply them atomically in a single store version bump.
   - Initially, cursor snapshots in `ReportService` only evicted by count (`MAX_SNAPSHOTS = 200`). I added TTL expiration (`15 minutes`), upper-bound offset validation (`offset >= rows.length` -> `400`), and LRU refresh on active walks.
+  - When adding CSV export validation, sharing `validateBrowseRequestsParams` directly would have validated or rejected `limit` and `cursor` query parameters on `/api/requests.csv`. I extracted `validateExportRequestsCsvParams(query)` to validate only the filter and sort parameters (`from`, `to`, `site_id`, `responder_id`, `late`, `within_target`, `sort`) while completely ignoring `limit` and `cursor`, and composed `validateBrowseRequestsParams` on top of it.
+
+## Additional Client Requirement: Monthly CSV Export (`GET /api/requests.csv`)
+
+- **Requirement overview**:
+  1. The finance team requested a CSV export of the request list for monthly Excel reporting.
+  2. Added `GET /api/requests.csv`, accepting the exact same filtering (`from`, `to`, `site_id`, `responder_id`, `late`, `within_target`) and sorting (`sort`: `id`, `-id`, `response_business_minutes`, `-response_business_minutes`) parameters as `GET /api/requests`.
+  3. Any `limit` and `cursor` query parameters passed to `GET /api/requests.csv` are ignored (`validateExportRequestsCsvParams` in `backend/src/middleware/validation.middleware.js`).
+  4. The endpoint exports **all** matching requests in full (never truncated to page size), sorted according to the requested `sort` parameter (defaulting to `id` ascending, with `null` values last and ties broken by `id` ascending), and responds with `Content-Type: text/csv`.
+  5. The CSV header is exact:
+     `id,site_id,responder_id,responder,response_business_minutes,within_target,completed_late`
+  6. Boolean fields (`within_target`, `completed_late`) are serialized as `true` or `false`.
+  7. `null` (or `undefined`) values are serialized as empty CSV fields (`""`).
+  8. Fields containing commas (`,`), double quotes (`"`), or line breaks (`\r`, `\n`) are enclosed in double quotes with internal double quotes doubled (`""`) per RFC 4180 (`escapeCsvField` in `backend/src/utils/csv.utils.js`).
+  9. Added a **Download CSV** button in the header of the Browse Requests section (`frontend/src/components/tables/RequestsTable.tsx`) that builds `/api/requests.csv?...` via `buildRequestsCsvUrl(filters)` (`frontend/src/services/report.api.ts`) using all currently selected filters and sorting, exporting the full matching dataset rather than only the currently displayed page.
+- **Reuse of existing SLA evaluation, filtering, and sorting logic**:
+  - `ReportService.exportRequestsCsv(query)` in `backend/src/services/report.service.js` calls the existing version-cached `this.getSlaReport(query.from, query.to)` (which delegates to `buildSlaReport` in `sla.service.js` for Rules 1–7), passes the resulting request rows through the existing `this.filterRows(baseReport.requests, query)` and `this.sortRows(filtered, query.sort)` methods, and serializes the sorted array with `serializeRequestsToCsv(sorted)`. Because `getSlaReport` is keyed by `store.getVersion()`, any live Helpdesk API changes synced via `/v1/changes` immediately invalidate stale cache entries and are reflected in subsequent CSV exports.
+- **Automated tests performed (`backend/tests/report.test.js`)**:
+  - Verified exact CSV header, `Content-Type: text/csv`, `true`/`false` booleans, empty fields for `null` values, filtering (`site_id`, `within_target`), sorting (`-response_business_minutes` with tie-breaking and nulls last), and confirmed that `limit=1&cursor=invalid_cursor` are ignored.
+  - Verified RFC 4180 escaping when responder names contain commas and double quotes (`Lim, Alice "The Ace"` -> `"Lim, Alice ""The Ace"""`) or embedded newlines (`Benjamin\nTan` -> `"Benjamin\nTan"`), and verified that live `store.upsertStaff` updates are immediately reflected in the CSV output.
+  - Verified full-dataset export across 255 matching requests in a single call (exceeding the 200-row pagination maximum of `GET /api/requests`).
+- **Trade-offs and limitations**:
+  - `serializeRequestsToCsv` builds the complete CSV body in memory before sending. For the 6-month Practice API dataset (~11,044 eligible requests, ~420 KB CSV payload), in-memory serialization completes in ~5 ms with negligible memory overhead. If the dataset scaled to hundreds of thousands of rows per export, buffering the entire string in memory would increase peak heap usage, and streaming rows via a Node.js `Readable` stream would be preferable.
 
 ## Trade-offs and what I would do next
 
